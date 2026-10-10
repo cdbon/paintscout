@@ -36,7 +36,7 @@
   Author Signature:  CDBonnett
   Original Creation: 29 September 2026
   License Version:   CC BY-NC-ND 4.0 International
-  Build Reference:   v0.3.1-draft
+  Build Reference:   v0.3.3-draft
   ============================================================================
 -->
 <html lang="en">
@@ -277,7 +277,7 @@ th{background:var(--surface2);color:var(--muted)}
 
 <script>
 'use strict';
-const APP_VERSION = '0.3.1-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
+const APP_VERSION = '0.3.3-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
 const DEVICES = ["Paul's Phone", "Cameron's Phone", 'Other phone'];
 /* Unsent-data limits, in MB of estimated batch size (photos + receipts x1.37). Starting guesses;
    tune after the real-phone tests (OI-05..07). Text (notes, details) is never blocked. */
@@ -299,7 +299,7 @@ const DECISIONS = [
 ];
 const CATEGORIES = ['Landscape','Seascape / marine','Portrait / figure','Still life','Floral','Animal / wildlife','Cityscape / architecture','Abstract / modern','Religious','Folk / naive','Other'];
 const MEDIUMS = ['Unknown','Oil','Acrylic','Watercolor','Pastel','Drawing (pencil, charcoal, ink)','Mixed media','Print (lithograph, etching, screenprint)','Reproduction / poster','Other'];
-const OWNER_FIELDS = [['title','Title'],['artist','Artist'],['signature','Signature / markings say'],['size','Size'],['medium','Medium'],['category','Category'],['condition','Condition'],['frame','Frame'],['known','What he already knows'],['notes','Notes'],['paid','Price paid'],['paidDate','Date bought'],['boughtWhere','Where bought'],['decision','Decision'],['decisionNote','Decision note']];
+const OWNER_FIELDS = [['title','Title'],['artist','Artist'],['signature','Signature / markings say'],['dims','Size (width × height)'],['medium','Medium'],['category','Category'],['condition','Condition'],['frame','Frame'],['known','Additional information'],['notes','Notes'],['paid','Price paid'],['paidDate','Date bought'],['boughtWhere','Where bought'],['decision','Decision'],['decisionNote','Decision note']];
 const SALE_FIELDS = ['venue','listedDate','asking','soldDate','soldPrice','fees','notes','archived'];
 
 const $ = (s, r=document) => r.querySelector(s);
@@ -307,7 +307,23 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = (p='') => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const nowIso = () => new Date().toISOString();
-const isEmpty = v => v == null || v === '' || v === false || (Array.isArray(v) && !v.length);
+const isEmpty = v => v == null || v === '' || v === false || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(isEmpty));
+/* Size: width and height, each as feet (0-20) plus inches in eighths (0 to 11 7/8). Stored as dims
+   {w:{ft,in8}, h:{ft,in8}} (in8 = eighths of an inch, 0-95); owner.size is a readable copy made from it. */
+const FRAC = ['', '⅛', '¼', '⅜', '½', '⅝', '¾', '⅞'];
+const emptyDims = () => ({w:{ft:null, in8:null}, h:{ft:null, in8:null}});
+const inLabel = i => ((Math.floor(i / 8) ? String(Math.floor(i / 8)) : '') + FRAC[i % 8] || '0') + ' in';
+function lenText(x){
+  if (!x || (x.ft == null && x.in8 == null)) return '';
+  const ft = x.ft || 0, i8 = x.in8 || 0;
+  return [ft ? ft + ' ft' : '', (i8 || !ft) ? inLabel(i8) : ''].filter(Boolean).join(' ');
+}
+const totIn = x => (x.ft || 0) * 12 + (x.in8 || 0) / 8;
+function sizeText(d){
+  if (!d || (lenText(d.w) === '' && lenText(d.h) === '')) return '';
+  const both = lenText(d.w) !== '' && lenText(d.h) !== '';
+  return `W ${lenText(d.w) || '?'} × H ${lenText(d.h) || '?'}` + (both ? ` (${+totIn(d.w).toFixed(3)} × ${+totIn(d.h).toFixed(3)} in)` : '');
+}
 const money = n => n == null || isNaN(n) ? '—' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:2});
 const fmtDate = iso => iso ? new Date(iso).toLocaleString() : '—';
 const fmtSize = b => b > 1048576 ? (b/1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b/1024)) + ' KB';
@@ -362,7 +378,7 @@ function status(msg){ const el = $('#status'); el.textContent = msg; }
 
 function newPainting(){
   return { id: 'PS-' + uid().toUpperCase(), createdAt: nowIso(), updatedAt: nowIso(), createdOn: device(), archived:false, sample:false,
-    owner: { title:'', artist:'', signature:'', size:'', medium:'', category:'', tags:[], condition:'', frame:'', known:'', notes:'', paid:null, paidDate:'', boughtWhere:'', decision:'', decisionNote:'' },
+    owner: { title:'', artist:'', signature:'', size:'', dims:emptyDims(), medium:'', category:'', tags:[], condition:'', frame:'', known:'', notes:'', paid:null, paidDate:'', boughtWhere:'', decision:'', decisionNote:'' },
     photos:[], receipts:[], sales:[], claude:null };
 }
 const saveQ = new Set(); let saveT;
@@ -505,15 +521,17 @@ function viewDetail(p){
     <span class="muted small mono">${esc(p.id)}${p.sample ? ' · SAMPLE' : ''}</span></div>
   <h2 id="detail-title">${esc(p.owner.title || 'Untitled painting')}</h2>
   ${p.archived ? `<p class="notice warn">This painting is archived. It is hidden from the collection but nothing was deleted. <button type="button" data-act="unarchive">Restore it</button></p>` : ''}
+  <section class="panel" aria-labelledby="h-name"><h3 id="h-name">Name this painting</h3>
+    ${fld(p, 'owner.title', 'Title', {hint:'A short name you will recognise, for example “Harbor at dusk”. It appears in the heading above and on the Collection page.'})}</section>
   ${secPhotos(p)}${secLens(p)}
-  <section class="panel" aria-labelledby="h-det"><h3 id="h-det">Details he knows</h3><div class="grid2">
-    ${fld(p, 'owner.title', 'Title')}${fld(p, 'owner.artist', 'Artist', {hint:'Leave blank if unknown.'})}
+  <section class="panel" aria-labelledby="h-det"><h3 id="h-det">Details</h3><div class="grid2">
+    ${fld(p, 'owner.artist', 'Artist', {hint:'Leave blank if unknown.'})}
     ${fld(p, 'owner.signature', 'What the signature or markings say', {hint:'Type it exactly as it looks, even partly.'})}
-    ${fld(p, 'owner.size', 'Size', {hint:'For example 24 x 36 in, without frame.'})}
+    ${secSize(p)}
     ${fld(p, 'owner.medium', 'Medium', {opts:MEDIUMS})}${fld(p, 'owner.category', 'Category', {opts:CATEGORIES})}
     ${fld(p, 'owner.condition', 'Condition', {hint:'Tears, flaking, stains, repairs.'})}${fld(p, 'owner.frame', 'Frame')}
     ${fld(p, 'owner.tags', 'Tags', {list:true, hint:'Separate with commas.'})}</div>
-    ${fld(p, 'owner.known', 'Anything else he already knows', {area:true, hint:'Where it came from, stories, previous owners, paperwork.'})}
+    ${fld(p, 'owner.known', 'Additional information', {area:true, hint:'Where it came from, stories, previous owners, paperwork.'})}
     ${fld(p, 'owner.notes', 'Notes', {area:true})}</section>
   ${secPurchase(p)}${secResearch(p)}${secDecision(p)}${secSales(p)}
   <section class="panel" aria-labelledby="h-arch"><h3 id="h-arch">Archive</h3>
@@ -528,7 +546,7 @@ function secPhotos(p){
       <p><strong>${esc(s.label)}</strong></p><p>${esc(s.tip)}</p>
       <div class="btn-row"><button type="button" class="gold big" data-act="cap" data-slot="${s.k}" id="guide-go"><span aria-hidden="true">📷</span> Take this photo</button>
       <button type="button" data-act="pick" data-slot="${s.k}">Choose a file</button><button type="button" data-act="guide-skip">Skip this one</button><button type="button" data-act="guide-end">Stop guide</button></div></div>`; }
-  else if (g && g.done) guide = `<div class="guide" role="region" aria-labelledby="g-h"><h3 id="g-h">Photos done</h3><p>${photoCount(p)} of 4 suggested photos taken. Now fill in what he knows below.</p><button type="button" data-act="guide-end" id="guide-go">Finish</button></div>`;
+  else if (g && g.done) guide = `<div class="guide" role="region" aria-labelledby="g-h"><h3 id="g-h">Photos done</h3><p>${photoCount(p)} of 4 suggested photos taken. Now fill in the details below.</p><button type="button" data-act="guide-end" id="guide-go">Finish</button></div>`;
   const slot = s => { const ph = activePhoto(p, s.k);
     return `<div class="slot" data-drop="photo" data-slot="${s.k}"><div class="slot-img">${ph ? `<img alt="${esc(s.label)}" data-blob="${ph.key}">` : '<span>No photo yet</span>'}</div>
       <p class="slot-label">${esc(s.label)}</p><div class="btn-row">
@@ -547,21 +565,42 @@ function secPhotos(p){
     ${old.length ? `<details><summary>Earlier and archived photos (${old.length})</summary><div class="slots">${old.map(ph => `<div class="slot"><div class="slot-img"><img alt="Earlier photo, ${esc(ph.slot)}" data-blob="${ph.key}"></div><p class="small muted">${esc(ph.slot)} · ${fmtDate(ph.addedAt)}${ph.archived ? ' · archived' : ''}</p>${ph.archived ? `<button type="button" data-act="unarch-photo" data-pid="${ph.id}">Restore</button>` : ''}</div>`).join('')}</div></details>` : ''}
   </section>`;
 }
-function secLens(p){
+function isIOS(ua){ ua = ua || navigator.userAgent; return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1); }
+function secSize(p){
+  const d = p.owner.dims || emptyDims();
+  const ftOpts = v => '<option value="">—</option>' + Array.from({length:21}, (_, i) => `<option value="${i}"${v === i ? ' selected' : ''}>${i} ft</option>`).join('');
+  const inOpts = v => '<option value="">—</option>' + Array.from({length:96}, (_, i) => `<option value="${i}"${v === i ? ' selected' : ''}>${inLabel(i)}</option>`).join('');
+  const col = (k, label) => `<div><div class="field"><label for="dim-${k}-ft">${label}, feet</label><select id="dim-${k}-ft" data-dim="${k}.ft">${ftOpts(d[k].ft)}</select></div>
+      <div class="field"><label for="dim-${k}-in">${label}, inches</label><select id="dim-${k}-in" data-dim="${k}.in8">${inOpts(d[k].in8)}</select></div></div>`;
+  return `<fieldset class="size" style="grid-column:1/-1"><legend>Size (width × height)</legend>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 .75rem">${col('w', 'Width')}${col('h', 'Height')}</div>
+    <p class="hint">Feet go up to 20 and inches in eighths. Measure the painting without its frame unless you say otherwise in Additional information. Leave a box on — if you do not know.</p>
+    <p class="small mono" id="size-sum" aria-live="polite">${esc(sizeText(d) || 'Not set')}</p></fieldset>`;
+}
+function secLens(p, ios){
   const have = SLOTS.filter(s => activePhoto(p, s.k));
   if (!have.length) return `<section class="panel" aria-labelledby="h-lens"><h3 id="h-lens">Search with Google Lens</h3><p class="muted">Take at least one photo first. Then you can search with it here.</p></section>`;
   if (!S.lensSlot || !have.some(s => s.k === S.lensSlot)) S.lensSlot = have[0].k;
+  if (ios === undefined) ios = isIOS();
   const canShare = typeof navigator.canShare === 'function';
-  return `<section class="panel" aria-labelledby="h-lens"><h3 id="h-lens">Search with Google Lens</h3>
-    <p>Google Lens is Google’s own picture search. It runs on Google’s website or app, not inside PaintScout, so PaintScout cannot read its answers. Look at what it finds, then type anything useful into “Anything else he already knows” below.</p>
-    <div class="field"><label for="lens-slot">Which photo to search with?</label><select id="lens-slot">${have.map(s => `<option value="${s.k}" ${s.k === S.lensSlot ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select></div>
-    <ol><li>Tap <strong>Save photo to this phone</strong>.</li>
+  const sel = SLOTS.find(s => s.k === S.lensSlot), ph = activePhoto(p, S.lensSlot);
+  const steps = ios
+    ? `<li>Press and hold the photo below until a menu appears, then tap <strong>Save to Photos</strong> (it may say <strong>Add to Photos</strong> or <strong>Save Image</strong>). That puts it in your Photos app.</li>
+      <li>Tap <strong>Open Google</strong>. In the search bar tap the camera (Lens) icon, then the picture (photo picker) icon, allow access to Photos, and choose the photo you just saved. It is the newest one.</li>
+      <li>Look at what it finds. Come back here and type anything useful into the notes.</li>`
+    : `<li>Tap <strong>Save photo to this phone</strong>.</li>
       <li><strong>On an Android phone:</strong> open the Google app or the Chrome app, tap the camera (Lens) icon in the search bar, and choose the saved photo. <strong>On a computer:</strong> tap <strong>Open Google</strong>, click the camera icon (Search by image), then Upload a file.</li>
-      <li>Look at what it finds. Come back here and type anything useful into the notes.</li></ol>
-    <div class="btn-row"><button type="button" data-act="lens-save">Save photo to this phone</button>
-      <a class="btn" href="https://www.google.com/" target="_blank" rel="noopener">Open Google</a>
+      <li>Look at what it finds. Come back here and type anything useful into the notes.</li>`;
+  return `<section class="panel" aria-labelledby="h-lens"><h3 id="h-lens">Search with Google Lens</h3>
+    <p>Google Lens is Google’s own picture search. It runs on Google’s website or app, not inside PaintScout, so PaintScout cannot read its answers. Look at what it finds, then type anything useful into “Additional information” below.</p>
+    <div class="field"><label for="lens-slot">Which photo to search with?</label><select id="lens-slot">${have.map(s => `<option value="${s.k}" ${s.k === S.lensSlot ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select></div>
+    <div class="slot-img" style="max-width:320px"><img id="lens-prev" alt="${esc(sel.label)}" data-blob="${ph.key}"></div>
+    <ol>${steps}</ol>
+    <div class="btn-row"><a class="btn" href="https://www.google.com/" target="_blank" rel="noopener">Open Google</a>
+      <button type="button" data-act="lens-save">${ios ? 'Save photo to Files' : 'Save photo to this phone'}</button>
       ${canShare ? '<button type="button" data-act="lens-share">Share photo…</button>' : ''}</div>
-    <p class="small muted">These steps follow Google’s own help page (Sources &amp; Citations, item 10), checked 9 Oct 2026. Phone screens change: if you do not see the icon, look for a Lens or camera icon. On a computer you may also be able to drag the photo onto Google’s Search by image box.</p></section>`;
+    ${ios ? '<p class="small muted">“Save photo to Files” puts the picture in the Files app (Downloads folder), not in Photos. Google’s photo picker shows Photos, so use press and hold above instead.</p>' : ''}
+    <p class="small muted">“Open Google” opens Google’s search page; there, the camera icon is Lens. These steps follow Google’s own help page (Sources &amp; Citations, item 10), checked 10 Oct 2026. Phone screens change: if you do not see the icon, look for a Lens or camera icon.</p></section>`;
 }
 async function lensFile(p){
   const ph = activePhoto(p, S.lensSlot); if (!ph) return null;
@@ -585,7 +624,7 @@ function secResearch(p){
   const c = p.claude;
   if (!c) return `<section class="panel" aria-labelledby="h-res"><h3 id="h-res">Research results</h3>
     <p class="muted">No research results yet. Send this painting in a batch (Send &amp; receive tab). Results come back as a file you import.</p>
-    <p class="small muted">He can also search with Google Lens and type what he finds into “Anything else he already knows”.</p></section>`;
+    <p class="small muted">He can also search with Google Lens and type what he finds into “Additional information”.</p></section>`;
   const comps = (c.comparables || []);
   const hasVal = comps.length && c.valueLow != null;
   const rec = DECISIONS.find(d => d.k === c.recommendation);
@@ -767,7 +806,7 @@ function planResults(data){
   for (const r of data.results || []){ const loc = S.paintings.find(p => p.id === r.id); if (loc) plan.matched.push({loc, r}); else plan.unmatched.push(r.id); }
   return plan;
 }
-function show(v){ return Array.isArray(v) ? v.join(', ') : typeof v === 'number' ? money(v) : String(v); }
+function show(v){ return Array.isArray(v) ? v.join(', ') : (v && typeof v === 'object' && v.w) ? (sizeText(v) || 'not set') : typeof v === 'number' ? money(v) : String(v); }
 function previewDialog(){
   const P = S.pending; let h;
   if (P.type === 'batch') {
@@ -873,7 +912,7 @@ function sampleResults(){
 function viewHelp(){
   return `<h2>Help</h2><section class="panel"><h3>How it works</h3><ol>
     <li><strong>New painting</strong> → the guide asks for 4 photos: front, front close-up, back, back close-up.</li>
-    <li>Fill in what he knows, what he paid, and add receipts. <strong>Search with Google Lens</strong> on the painting’s page can help; type what it finds into the notes.</li>
+    <li>Fill in the details, what he paid, and add receipts. <strong>Search with Google Lens</strong> on the painting’s page can help; type what it finds into the notes.</li>
     <li><strong>Send &amp; receive</strong>: choose which phone this is, tap <strong>Share…</strong>, then Drive, then the PaintScout folder. Then tell the app whether it reached Drive. When the red or gold bar at the top says time to send, do this before taking more photos.</li>
     <li>Research results come back as a file. Open it in <strong>Send &amp; receive</strong>; check the preview; apply.</li>
     <li>He reads the results and chooses a decision. Record listings and sales as they happen.</li></ol></section>
@@ -900,7 +939,7 @@ const CITES = [
     {t:'The capture attribute (HTML media capture)', p:'MDN Web Docs', u:'https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes/capture', n:'How “Take photo” opens the phone’s camera.'},
     {t:'StorageManager: persist() method', p:'MDN Web Docs', u:'https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist', n:'How the app asks the browser not to clear its stored data.'}]},
   {id:'google', title:'Google tools the app points to', blurb:'Outside tools used for picture search and for moving files to a computer. They are not part of PaintScout.', items:[
-    {t:'Search with an image on Google', p:'Google Search Help', u:'https://support.google.com/websearch/answer/1325808', n:'The source for the Google Lens steps in the app: on a computer, Search by image then Upload a file; on Android, the Lens icon in the Google or Chrome app.'},
+    {t:'Search with an image on Google', p:'Google Search Help', u:'https://support.google.com/websearch/answer/1325808', n:'The source for the Google Lens steps in the app: on a computer, Search by image then Upload a file; on Android, the Lens icon in the Google or Chrome app; on iPhone (read 10 Oct 2026), the Lens icon in the Google, Chrome or Safari search bar, then the photo picker icon.'},
     {t:'Share files from Google Drive', p:'Google Drive Help', u:'https://support.google.com/drive/answer/2494822', n:'How a Drive folder is shared with another person.'},
     {t:'Use Google Drive for desktop', p:'Google Drive Help', u:'https://support.google.com/drive/answer/10838124', n:'How files in a Drive folder appear on a Windows computer.'}]},
   {id:'appraise', title:'Appraisal terms', blurb:'Why the app says “estimate” and not “appraisal”, and where professional appraisers are found.', items:[
@@ -1016,10 +1055,14 @@ function onInput(e){
   if (el.id === 'q') { S.filter.q = el.value; renderGrid(); return; }
   if (el.id === 'show-arch') { S.filter.archived = el.checked; renderGrid(); return; }
   if (el.id === 'dev') { lsSet('ps-device', el.value.trim()); return; }
-  if (el.id === 'lens-slot') { S.lensSlot = el.value; return; }
+  if (el.id === 'lens-slot') { S.lensSlot = el.value; const q = cur(), ph = q && activePhoto(q, el.value), im = $('#lens-prev');
+    if (ph && im) { im.removeAttribute('src'); im.dataset.blob = ph.key; im.alt = (SLOTS.find(s => s.k === el.value) || {}).label || 'Photo'; hydrate(im.parentElement); } return; }
   if (el.name === 'exp-mode') { estimateExport(); return; }
   if (el.dataset.conf) { const [ui, ci] = el.dataset.conf.split(':').map(Number); S.pending.updates.filter(u => u.conflicts.length)[ui].conflicts[ci].choice = el.value; return; }
   const p = cur(); if (!p) return;
+  if (el.dataset.dim) { const [k, part] = el.dataset.dim.split('.'); const d = p.owner.dims = p.owner.dims || emptyDims();
+    d[k][part] = el.value === '' ? null : Number(el.value); p.owner.size = sizeText(d);
+    const sm = $('#size-sum'); if (sm) sm.textContent = p.owner.size || 'Not set'; touch(p); return; }
   let v = el.value;
   if (el.dataset.money) { const n = parseMoney(v); const err = $('#' + el.id + '-e');
     if (n === undefined) { el.setAttribute('aria-invalid', 'true'); if (err) { err.hidden = false; err.textContent = 'Enter a number, like 45 or 45.50 — or leave it blank.'; el.setAttribute('aria-describedby', err.id); } return; }
