@@ -36,7 +36,7 @@
   Author Signature:  CDBonnett
   Original Creation: 29 September 2026
   License Version:   CC BY-NC-ND 4.0 International
-  Build Reference:   v0.3.3-draft
+  Build Reference:   v0.3.4-draft
   ============================================================================
 -->
 <html lang="en">
@@ -277,7 +277,7 @@ th{background:var(--surface2);color:var(--muted)}
 
 <script>
 'use strict';
-const APP_VERSION = '0.3.3-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
+const APP_VERSION = '0.3.4-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
 const DEVICES = ["Paul's Phone", "Cameron's Phone", 'Other phone'];
 /* Unsent-data limits, in MB of estimated batch size (photos + receipts x1.37). Starting guesses;
    tune after the real-phone tests (OI-05..07). Text (notes, details) is never blocked. */
@@ -526,13 +526,14 @@ function viewDetail(p){
   ${secPhotos(p)}${secLens(p)}
   <section class="panel" aria-labelledby="h-det"><h3 id="h-det">Details</h3><div class="grid2">
     ${fld(p, 'owner.artist', 'Artist', {hint:'Leave blank if unknown.'})}
-    ${fld(p, 'owner.signature', 'What the signature or markings say', {hint:'Type it exactly as it looks, even partly.'})}
+    ${fld(p, 'owner.signature', 'What the signature or markings say', {hint:'Type it exactly as it looks, even partly.'})}</div>
+    ${fld(p, 'owner.notes', 'Notes', {area:true})}
+    ${fld(p, 'owner.known', 'Additional information', {area:true, hint:'Where it came from, stories, previous owners, paperwork.'})}
+    <div class="grid2">
     ${secSize(p)}
     ${fld(p, 'owner.medium', 'Medium', {opts:MEDIUMS})}${fld(p, 'owner.category', 'Category', {opts:CATEGORIES})}
     ${fld(p, 'owner.condition', 'Condition', {hint:'Tears, flaking, stains, repairs.'})}${fld(p, 'owner.frame', 'Frame')}
-    ${fld(p, 'owner.tags', 'Tags', {list:true, hint:'Separate with commas.'})}</div>
-    ${fld(p, 'owner.known', 'Additional information', {area:true, hint:'Where it came from, stories, previous owners, paperwork.'})}
-    ${fld(p, 'owner.notes', 'Notes', {area:true})}</section>
+    ${fld(p, 'owner.tags', 'Tags', {list:true, hint:'Separate with commas.'})}</div></section>
   ${secPurchase(p)}${secResearch(p)}${secDecision(p)}${secSales(p)}
   <section class="panel" aria-labelledby="h-arch"><h3 id="h-arch">Archive</h3>
     <p class="muted">Archiving hides this painting from the collection. Nothing is ever deleted and you can restore it any time.</p>
@@ -585,7 +586,7 @@ function secLens(p, ios){
   const canShare = typeof navigator.canShare === 'function';
   const sel = SLOTS.find(s => s.k === S.lensSlot), ph = activePhoto(p, S.lensSlot);
   const steps = ios
-    ? `<li>Press and hold the photo below until a menu appears, then tap <strong>Save to Photos</strong> (it may say <strong>Add to Photos</strong> or <strong>Save Image</strong>). That puts it in your Photos app.</li>
+    ? `<li>Press and hold the photo above until a menu appears, then tap <strong>Save to Photos</strong> (it may say <strong>Add to Photos</strong> or <strong>Save Image</strong>). That puts it in your Photos app.</li>
       <li>Tap <strong>Open Google</strong>. In the search bar tap the camera (Lens) icon, then the picture (photo picker) icon, allow access to Photos, and choose the photo you just saved. It is the newest one.</li>
       <li>Look at what it finds. Come back here and type anything useful into the notes.</li>`
     : `<li>Tap <strong>Save photo to this phone</strong>.</li>
