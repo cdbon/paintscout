@@ -36,7 +36,7 @@
   Author Signature:  CDBonnett
   Original Creation: 29 September 2026
   License Version:   CC BY-NC-ND 4.0 International
-  Build Reference:   v0.3.0-draft
+  Build Reference:   v0.3.1-draft
   ============================================================================
 -->
 <html lang="en">
@@ -277,7 +277,7 @@ th{background:var(--surface2);color:var(--muted)}
 
 <script>
 'use strict';
-const APP_VERSION = '0.3.0-draft', APP_DATE = '9 Oct 2026', FORMAT_VERSION = 1;
+const APP_VERSION = '0.3.1-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
 const DEVICES = ["Paul's Phone", "Cameron's Phone", 'Other phone'];
 /* Unsent-data limits, in MB of estimated batch size (photos + receipts x1.37). Starting guesses;
    tune after the real-phone tests (OI-05..07). Text (notes, details) is never blocked. */
@@ -316,7 +316,25 @@ function getPath(o, path){ return path.split('.').reduce((a, k) => a == null ? u
 function setPath(o, path, v){ const ks = path.split('.'); let a = o; ks.slice(0, -1).forEach(k => { if (a[k] == null) a[k] = {}; a = a[k]; }); a[ks[ks.length-1]] = v; }
 
 /* ---------- IndexedDB ---------- */
-let db;
+/* iPhone Safari can close the database connection behind the app's back (tab in the background,
+   memory pressure): "InvalidStateError ... The database connection is closing". So the connection is
+   never trusted: every call goes through withDb(), which reopens it once and retries (10 Oct 2026). */
+let db = null, dbOpening = null;
+function ensureDb(){
+  if (db) return Promise.resolve(db);
+  if (!dbOpening) dbOpening = idbOpen().then(d => {
+    db = d;
+    d.onclose = () => { if (db === d) db = null; };
+    d.onversionchange = () => { d.close(); if (db === d) db = null; };
+    return d; }).finally(() => { dbOpening = null; });
+  return dbOpening;
+}
+async function withDb(fn){
+  try { return await fn(await ensureDb()); }
+  catch (e) {
+    if (e && e.name === 'InvalidStateError') { try { if (db) db.close(); } catch {} db = null; return await fn(await ensureDb()); }
+    throw e; }
+}
 function idbOpen(){ return new Promise((res, rej) => {
   const r = indexedDB.open('paintscout', 1);
   r.onupgradeneeded = () => { const d = r.result;
@@ -327,10 +345,10 @@ function idbOpen(){ return new Promise((res, rej) => {
 function rq(r){ return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
 function txDone(t){ return new Promise((res, rej) => { t.oncomplete = () => res(); t.onerror = t.onabort = () => rej(t.error); }); }
 const idb = {
-  all: n => rq(db.transaction(n).objectStore(n).getAll()),
-  get: (n, k) => rq(db.transaction(n).objectStore(n).get(k)),
-  put: async (n, v) => { const t = db.transaction(n, 'readwrite'); t.objectStore(n).put(v); await txDone(t); },
-  del: async (n, k) => { const t = db.transaction(n, 'readwrite'); t.objectStore(n).delete(k); await txDone(t); }
+  all: n => withDb(d => rq(d.transaction(n).objectStore(n).getAll())),
+  get: (n, k) => withDb(d => rq(d.transaction(n).objectStore(n).get(k))),
+  put: (n, v) => withDb(async d => { const t = d.transaction(n, 'readwrite'); t.objectStore(n).put(v); await txDone(t); }),
+  del: (n, k) => withDb(async d => { const t = d.transaction(n, 'readwrite'); t.objectStore(n).delete(k); await txDone(t); })
 };
 
 /* ---------- State ---------- */
@@ -1039,7 +1057,7 @@ function setupDrop(){
 /* ---------- Start ---------- */
 async function start(){
   $('#ver').textContent = 'v' + APP_VERSION; $('#ver-date').textContent = APP_DATE; $('#ver-top').textContent = 'v' + APP_VERSION + ' · ' + APP_DATE;
-  try { db = await idbOpen(); } catch (e) { $('#main').innerHTML = `<p class="notice warn">This browser will not let PaintScout store data (${esc(e.message)}). Private browsing can cause this. Try a normal window.</p>`; return; }
+  try { await ensureDb(); } catch (e) { $('#main').innerHTML = `<p class="notice warn">This browser will not let PaintScout store data (${esc(e.message)}). Private browsing can cause this. Try a normal window.</p>`; return; }
   S.paintings = (await idb.all('paintings')).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   document.addEventListener('click', onAct);
   $('.skip').addEventListener('click', e => { e.preventDefault(); const m = $('#main'); m.focus(); m.scrollIntoView({block:'start'}); });
