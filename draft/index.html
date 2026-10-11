@@ -39,7 +39,7 @@
   Author Signature:  CDBonnett
   Original Creation: 29 September 2026
   License Version:   Proprietary, All Rights Reserved (from v0.4.1-draft)
-  Build Reference:   v0.4.2-draft
+  Build Reference:   v0.4.3-draft
   ============================================================================
 -->
 <html lang="en">
@@ -121,6 +121,13 @@ a.btn{display:inline-flex;align-items:center;text-decoration:none;color:var(--in
 .field label,.field .lbl{display:block;font-weight:600;margin-bottom:.25rem}
 input[type=text],input[type=search],input[type=date],select,textarea{font:inherit;width:100%;min-height:44px;padding:.55rem .7rem;border-radius:8px;border:1px solid var(--ctl);background:var(--input-bg);color:var(--ink)}
 textarea{min-height:88px;resize:vertical}
+/* v0.4.3 (iPhone, 11 Oct 2026): Safari draws date boxes at a fixed minimum width and ignores width:100%,
+   so they stuck out of their section; long web addresses (no spaces) ran past the edge of their box. */
+input[type=date]{display:block;min-width:0;max-width:100%;-webkit-appearance:none;appearance:none}
+input[type=date]::-webkit-date-and-time-value{text-align:left}
+.grid2>*,.field{min-width:0}
+.panel,.sale,.notice,.cite-item,dialog{overflow-wrap:anywhere}
+.panel td,.panel th{overflow-wrap:normal}
 input[aria-invalid=true]{border-color:var(--red)}
 .err{color:var(--red);font-size:.875rem;margin:.25rem 0 0}
 .hint{color:var(--muted);font-size:.875rem;margin:.25rem 0 0}
@@ -281,7 +288,7 @@ th{background:var(--surface2);color:var(--muted)}
 
 <script>
 'use strict';
-const APP_VERSION = '0.4.2-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
+const APP_VERSION = '0.4.3-draft', APP_DATE = '11 Oct 2026', FORMAT_VERSION = 1;
 /* Each device has a code that starts its painting numbers (PBP-001, CBC-001 ...), so numbers made on
    different devices can never clash (CDBonnett's choice "a", 10 Oct 2026). The label is stored as
    "Paul's phone (PBP)"; the code is read back from the brackets. */
