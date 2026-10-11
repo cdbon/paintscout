@@ -39,7 +39,7 @@
   Author Signature:  CDBonnett
   Original Creation: 29 September 2026
   License Version:   Proprietary, All Rights Reserved (from v0.4.1-draft)
-  Build Reference:   v0.4.1-draft
+  Build Reference:   v0.4.2-draft
   ============================================================================
 -->
 <html lang="en">
@@ -281,7 +281,7 @@ th{background:var(--surface2);color:var(--muted)}
 
 <script>
 'use strict';
-const APP_VERSION = '0.4.1-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
+const APP_VERSION = '0.4.2-draft', APP_DATE = '10 Oct 2026', FORMAT_VERSION = 1;
 /* Each device has a code that starts its painting numbers (PBP-001, CBC-001 ...), so numbers made on
    different devices can never clash (CDBonnett's choice "a", 10 Oct 2026). The label is stored as
    "Paul's phone (PBP)"; the code is read back from the brackets. */
@@ -927,7 +927,8 @@ async function doExport(how){
   const batch = await buildBatch(mode); const json = JSON.stringify(batch); const name = fileName('batch');
   if (how === 'share' && navigator.canShare) {
     for (const type of ['application/json', 'text/plain']) { const f = new File([json], name, {type});
-      if (navigator.canShare({files:[f]})) { try { await navigator.share({files:[f], title:name}); status(`Shared ${batch.count} paintings. Confirm it reached Drive.`); askSent(batch, 'share'); return; }
+      /* Files only, no title: iPhone turns a title into a second, text-only file in Drive (10 Oct 2026). */
+      if (navigator.canShare({files:[f]})) { try { await navigator.share({files:[f]}); status(`Shared ${batch.count} paintings. Confirm it reached Drive.`); askSent(batch, 'share'); return; }
         catch (e) { if (e.name === 'AbortError') { status('Share cancelled — nothing was sent.'); return; } } } }
     status('This browser cannot share files — downloading instead. Then upload it to Drive.');
   }
@@ -1203,7 +1204,7 @@ async function onAct(e){
     case 'lens-save': { const f = await lensFile(p); if (!f) { status('No photo to save.'); break; } downloadFile(f); status('Photo saved to this phone (Downloads). Now open Google Lens and choose it.'); break; }
     case 'lens-share': { const f = await lensFile(p); if (!f) { status('No photo to share.'); break; }
       if (!navigator.canShare || !navigator.canShare({files:[f]})) { status('This browser cannot share pictures. Use “Save photo to this phone” instead.'); break; }
-      try { await navigator.share({files:[f], title:f.name}); } catch (err) { if (err.name !== 'AbortError') status('Could not share the photo. Use “Save photo to this phone” instead.'); } break; }
+      try { await navigator.share({files:[f]}); } catch (err) { if (err.name !== 'AbortError') status('Could not share the photo. Use “Save photo to this phone” instead.'); } break; }
     case 'new': { if (limitLevel() >= 2) { limitBlock('new'); break; }
       if (!devCode()) { S.devPick = ''; openDialog(`<h2 id="dlg-title">Which device is this?</h2><p>Choose it once. Its letters start each painting’s number, so numbers made on different phones and computers never clash.</p>${devField('dev-new')}
         <div class="btn-row"><button type="button" class="primary" data-act="dev-new-go">Save and start the painting</button><button type="button" data-act="close-dlg">Cancel</button></div>`); break; }
