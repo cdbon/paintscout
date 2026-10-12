@@ -39,7 +39,7 @@
   Author Signature:  CDBonnett
   Original Creation: 29 September 2026
   License Version:   Proprietary, All Rights Reserved (from v0.4.1-draft)
-  Build Reference:   v0.4.3-draft
+  Build Reference:   v0.4.4-draft
   ============================================================================
 -->
 <html lang="en">
@@ -288,7 +288,7 @@ th{background:var(--surface2);color:var(--muted)}
 
 <script>
 'use strict';
-const APP_VERSION = '0.4.3-draft', APP_DATE = '11 Oct 2026', FORMAT_VERSION = 1;
+const APP_VERSION = '0.4.4-draft', APP_DATE = '12 Oct 2026', FORMAT_VERSION = 1;
 /* Each device has a code that starts its painting numbers (PBP-001, CBC-001 ...), so numbers made on
    different devices can never clash (CDBonnett's choice "a", 10 Oct 2026). The label is stored as
    "Paul's phone (PBP)"; the code is read back from the brackets. */
@@ -317,7 +317,7 @@ const DECISIONS = [
   {k:'keep', label:'Keep it', desc:'Not selling.'}
 ];
 const CATEGORIES = ['Landscape','Seascape / marine','Portrait / figure','Still life','Floral','Animal / wildlife','Cityscape / architecture','Abstract / modern','Religious','Folk / naive','Other'];
-const MEDIUMS = ['Unknown','Oil','Acrylic','Watercolor','Pastel','Drawing (pencil, charcoal, ink)','Mixed media','Print (lithograph, etching, screenprint)','Reproduction / poster','Other'];
+const MEDIUMS = ['Unknown','Oil','Acrylic','Watercolor','Pastel','Drawing (pencil, charcoal, ink)','Mixed media','Print (lithograph, etching, screenprint)','Hand embellished print (with remarque)','Serigraph on wove paper','Reproduction / poster','Other'];
 const OWNER_FIELDS = [['title','Title'],['artist','Artist'],['signature','Signature / markings say'],['dims','Size (width × height)'],['medium','Medium'],['category','Category'],['condition','Condition'],['frame','Frame'],['known','Additional information'],['notes','Notes'],['paid','Price paid'],['paidDate','Date bought'],['boughtWhere','Where bought'],['appraisedValue','Appraised value'],['appraisedDate','Date appraised'],['appraisedBy','Appraised by'],['decision','Decision'],['decisionNote','Decision note']];
 const SALE_FIELDS = ['venue','listedDate','asking','soldDate','soldPrice','fees','notes','archived'];
 const COST_FIELDS = ['type','amount','date','note','archived'];
@@ -330,6 +330,11 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = (p='') => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const nowIso = () => new Date().toISOString();
+/* Calendar dates and file-name stamps use the device's LOCAL time. The UTC date (toISOString) is already
+   "tomorrow" in the evening in US time zones (found 11 Oct 2026, OI-56). Timestamps such as updatedAt stay UTC. */
+const pad2 = n => String(n).padStart(2, '0');
+const localDate = (d = new Date()) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const localStamp = (d = new Date()) => `${localDate(d).replace(/-/g, '')}${pad2(d.getHours())}${pad2(d.getMinutes())}`;
 const isEmpty = v => v == null || v === '' || v === false || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(isEmpty));
 /* Size: width and height, each as feet (0-20) plus inches in eighths (0 to 11 7/8). Stored as dims
    {w:{ft,in8}, h:{ft,in8}} (in8 = eighths of an inch, 0-95); owner.size is a readable copy made from it. */
@@ -397,17 +402,24 @@ function cur(){ return S.paintings.find(p => p.id === S.current); }
 function device(){ try { return localStorage.getItem('ps-device') || ''; } catch { return ''; } }
 function devCode(){ const m = /\((PBP|PBC|CBP|CBC|O)\)$/.exec(device()); return m ? m[1] : ''; }
 /* Next painting number for this device: one more than the highest seen with this device's code,
-   counting archived and imported paintings too (nothing is ever deleted, so a number is never reused). */
+   counting archived and imported paintings too, and the last number this device handed out (kept in local
+   storage), so the number of a cancelled empty painting is skipped, never reused (CDBonnett, 11 Oct 2026). */
 function nextNum(){
   const code = devCode(); if (!code) return '';
   const re = new RegExp('^' + code + '-(\\d+)$');
   const max = S.paintings.reduce((m, p) => { const x = re.exec(p.num || ''); return x ? Math.max(m, Number(x[1])) : m; }, 0);
-  return code + '-' + String(max + 1).padStart(3, '0');
+  const last = Number(lsGet('ps-last-' + code)) || 0;
+  return code + '-' + String(Math.max(max, last) + 1).padStart(3, '0');
 }
+function rememberNum(num){ const m = /^([A-Z]+)-(\d+)$/.exec(num || ''); if (m) lsSet('ps-last-' + m[1], String(Math.max(Number(lsGet('ps-last-' + m[1])) || 0, Number(m[2])))); }
 const shownNum = p => p.num || p.id;
 function lsGet(k){ try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v){ try { localStorage.setItem(k, v); } catch {} }
-function status(msg){ const el = $('#status'); el.textContent = msg; }
+/* A message such as "Archived. To restore it…" must not vanish a third of a second later when the autosave
+   writes "Saved 9:49 PM". Messages other than Saving/Saved stay for 8 seconds and are shown beside the
+   Saved time (OI-54). */
+let stickyMsg = '', stickyUntil = 0;
+function status(msg){ const el = $('#status'); if (!/^Saved |^Saving/.test(msg)) { stickyMsg = msg; stickyUntil = Date.now() + 8000; } el.textContent = msg; }
 
 function newPainting(num){
   return { id: 'PS-' + uid().toUpperCase(), num: num === undefined ? nextNum() : num, createdAt: nowIso(), updatedAt: nowIso(), createdOn: device(), archived:false, sample:false,
@@ -418,11 +430,12 @@ function newPainting(num){
 function normalize(p){ if (!Array.isArray(p.costs)) p.costs = []; if (!Array.isArray(p.custody)) p.custody = []; if (!Array.isArray(p.sales)) p.sales = []; return p; }
 const isCustodyPhoto = ph => (ph.slot || '').startsWith('cus-');
 const saveQ = new Set(); let saveT;
-function touch(p){ p.updatedAt = nowIso(); saveQ.add(p.id); clearTimeout(saveT); status('Saving…'); saveT = setTimeout(flushSaves, 350); }
+function touch(p){ p.updatedAt = nowIso(); saveQ.add(p.id); clearTimeout(saveT); if (stickyUntil <= Date.now()) status('Saving…'); saveT = setTimeout(flushSaves, 350); }
 async function flushSaves(){
   const ids = Array.from(saveQ); saveQ.clear();
   try { for (const id of ids){ const p = S.paintings.find(x => x.id === id); if (p) await idb.put('paintings', p); }
-    status('Saved ' + new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}));
+    const t = 'Saved ' + new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    $('#status').textContent = stickyUntil > Date.now() ? stickyMsg + ' · ' + t : t;
   } catch (e) { status('Could not save: ' + e.message); }
 }
 async function blobUrl(key){
@@ -511,11 +524,11 @@ function viewCollection(){
   return `<section aria-labelledby="h-col">
   <div class="view-head"><h2 id="h-col">Collection</h2><button type="button" class="primary big" data-act="new">+ New painting</button></div>
   <div class="counts" role="group" aria-label="Show paintings by decision">
-    ${btn('all', 'All', live.length)}${btn('', 'Undecided', cnt(''))}${DECISIONS.map(d => btn(d.k, d.label, cnt(d.k))).join('')}${btn('__out', 'Out of his hands', live.filter(isOut).length)}
+    ${btn('all', 'All', live.length)}${btn('', 'Undecided', cnt(''))}${DECISIONS.map(d => btn(d.k, d.label, cnt(d.k))).join('')}${btn('__out', 'Not with the owner', live.filter(isOut).length)}${btn('__arch', 'Archived', S.paintings.length - live.length)}
   </div>
+  <p class="muted small">The counts do not include archived paintings. Tap <strong>Archived</strong> to see only those and restore one.</p>
   <div class="toolbar">
     <div class="field"><label for="q">Search title, artist, notes or number</label><input id="q" type="search" value="${esc(S.filter.q)}" autocomplete="off"></div>
-    <label class="check"><input type="checkbox" id="show-arch" ${S.filter.archived ? 'checked' : ''}> Show archived</label>
   </div>
   <p id="grid-count" class="muted small" aria-live="polite"></p>
   <ul class="cards" id="grid"></ul>
@@ -523,10 +536,13 @@ function viewCollection(){
 }
 function renderGrid(){
   const q = S.filter.q.trim().toLowerCase();
-  const list = S.paintings.filter(p => (S.filter.archived || !p.archived)
-    && (S.filter.decision === 'all' || (S.filter.decision === '__out' ? isOut(p) : (p.owner.decision || '') === S.filter.decision))
+  const arch = S.filter.decision === '__arch';
+  const pool = S.paintings.filter(p => !!p.archived === arch);
+  const list = pool.filter(p => (arch || S.filter.decision === 'all' || (S.filter.decision === '__out' ? isOut(p) : (p.owner.decision || '') === S.filter.decision))
     && (!q || [p.id, p.num, p.owner.title, p.owner.artist, p.owner.notes, p.owner.known, p.owner.signature].join(' ').toLowerCase().includes(q)));
-  $('#grid-count').textContent = S.paintings.length ? `Showing ${list.length} of ${S.paintings.length} paintings` : 'No paintings yet. Tap “New painting” to start.';
+  $('#grid-count').textContent = !S.paintings.length ? 'No paintings yet. Tap “New painting” to start.'
+    : arch ? (pool.length ? `Showing ${list.length} of ${pool.length} archived paintings. Tap Restore on a card to bring one back.` : 'No archived paintings.')
+    : `Showing ${list.length} of ${pool.length} paintings`;
   $('#grid').innerHTML = list.map(p => {
     const d = DECISIONS.find(x => x.k === p.owner.decision); const ph = activePhoto(p, 'front-full'); const out = outEntry(p), sold = soldEntry(p);
     return `<li><button type="button" class="card" data-act="open" data-id="${p.id}" aria-label="Open ${esc(shownNum(p))}, ${esc(p.owner.title || 'untitled painting')}, ${esc(d ? d.label : 'undecided')}${out ? ', out with ' + esc(out.who || 'someone') : ''}">
@@ -537,7 +553,8 @@ function renderGrid(){
       ${out ? `<span class="chip out">Out: ${esc(out.who || 'someone')}${out.outDate ? ' since ' + esc(out.outDate) : ''}</span>` : sold ? `<span class="chip d-list">With buyer: ${esc(sold.who || 'buyer')}</span>` : ''}
       ${p.claude ? '<span class="chip d-auction">Research results in</span>' : ''}
       ${p.archived ? '<span class="chip arch">Archived</span>' : ''}${p.sample ? '<span class="chip sample">Sample</span>' : ''}
-      <span class="muted small mono">${esc(shownNum(p))} · Photos ${photoCount(p)}/4</span></div></button></li>`; }).join('');
+      <span class="muted small mono">${esc(shownNum(p))} · Photos ${photoCount(p)}/4</span></div></button>
+      ${p.archived ? `<div class="btn-row"><button type="button" data-act="unarchive-card" data-id="${p.id}" aria-label="Restore ${esc(shownNum(p))}, ${esc(p.owner.title || 'untitled painting')}">Restore</button></div>` : ''}</li>`; }).join('');
   hydrate($('#grid'));
 }
 
@@ -555,11 +572,7 @@ function fld(p, path, label, o={}){
 }
 function viewDetail(p){
   if (!p) return '<p>Painting not found.</p>';
-  return `<div class="view-head"><button type="button" data-act="back">← Collection</button>
-    <span class="muted small mono">${p.num ? `<strong>${esc(p.num)}</strong> · ` : ''}${esc(p.id)}${p.sample ? ' · SAMPLE' : ''}</span></div>
-  <h2 id="detail-title">${esc(p.owner.title || 'Untitled painting')}</h2>
-  ${p.archived ? `<p class="notice warn">This painting is archived. It is hidden from the collection but nothing was deleted. <button type="button" data-act="unarchive">Restore it</button></p>` : ''}
-  <section class="panel" aria-labelledby="h-name"><h3 id="h-name">Name this painting</h3>
+  const body = `<section class="panel" aria-labelledby="h-name"><h3 id="h-name">Name this painting</h3>
     ${fld(p, 'owner.title', 'Title', {hint:'A short name you will recognise, for example “Harbor at dusk”. It appears in the heading above and on the Collection page.'})}</section>
   ${secPhotos(p)}${secLens(p)}
   <section class="panel" aria-labelledby="h-det"><h3 id="h-det">Details</h3><div class="grid2">
@@ -573,9 +586,25 @@ function viewDetail(p){
     ${fld(p, 'owner.condition', 'Condition', {hint:'Tears, flaking, stains, repairs.'})}${fld(p, 'owner.frame', 'Frame')}
     ${fld(p, 'owner.tags', 'Tags', {list:true, hint:'Separate with commas.'})}</div></section>
   ${secPurchase(p)}${secCustody(p)}${secResearch(p)}${secDecision(p)}${secSales(p)}${secMoney(p)}
-  <section class="panel" aria-labelledby="h-arch"><h3 id="h-arch">Archive</h3>
-    <p class="muted">Archiving hides this painting from the collection. Nothing is ever deleted and you can restore it any time.</p>
+  <section class="panel" aria-labelledby="h-next"><h3 id="h-next">Done with this painting?</h3>
+    <div class="btn-row"><button type="button" class="primary" data-act="new">+ Add another painting</button><button type="button" data-act="back">← All paintings</button></div></section>
+  <section class="panel" aria-labelledby="h-arch"><h3 id="h-arch">Archive painting</h3>
+    <p class="muted">Archiving hides this painting from the Collection. Nothing is deleted. To bring it back, open the Collection tab, tap <strong>Archived</strong>, and tap <strong>Restore</strong>.</p>
     ${p.archived ? '<button type="button" data-act="unarchive">Restore painting</button>' : '<button type="button" data-act="archive">Archive painting</button>'}</section>`;
+  const head = `<div class="view-head"><button type="button" data-act="back">← All paintings</button>
+    <span class="muted small mono">${p.num ? `<strong>${esc(p.num)}</strong> · ` : ''}${esc(p.id)}${p.sample ? ' · SAMPLE' : ''}</span></div>
+  <h2 id="detail-title">${esc(p.owner.title || 'Untitled painting')}</h2>`;
+  if (p.archived) return head + `<p class="notice warn">This painting is archived, so it is hidden from the Collection. Nothing was deleted. <button type="button" data-act="unarchive">Restore it</button><br><span class="small">To find it later: Collection tab, then <strong>Archived</strong>.</span></p>
+    <details><summary>Show the details of this painting</summary>${body}</details>`;
+  const cancel = paintingIsEmpty(p) ? `<div class="notice"><p>Nothing has been entered for this painting yet. Tapped New painting by mistake? Cancel it. It is thrown away and its number (${esc(shownNum(p))}) is skipped.</p>
+    <button type="button" data-act="cancel-painting">Cancel this painting</button></div>` : '';
+  return head + cancel + body;
+}
+/* A brand-new painting with no photos, receipts, entries or typed text is still a draft (rule I1, draft exception). */
+function paintingIsEmpty(p){
+  const o = p.owner || {};
+  return !p.archived && !p.sample && !p.claude && !(p.photos || []).length && !(p.receipts || []).length && !(p.sales || []).length && !(p.costs || []).length && !(p.custody || []).length
+    && Object.keys(o).every(k => k === 'dims' || k === 'size' ? !o.size : isEmpty(o[k]));
 }
 function secPhotos(p){
   const g = S.guide && S.guide.pid === p.id ? S.guide : null;
@@ -585,7 +614,7 @@ function secPhotos(p){
       <p><strong>${esc(s.label)}</strong></p><p>${esc(s.tip)}</p>
       <div class="btn-row"><button type="button" class="gold big" data-act="cap" data-slot="${s.k}" id="guide-go"><span aria-hidden="true">📷</span> Take this photo</button>
       <button type="button" data-act="pick" data-slot="${s.k}">Choose a file</button><button type="button" data-act="guide-skip">Skip this one</button><button type="button" data-act="guide-end">Stop guide</button></div></div>`; }
-  else if (g && g.done) guide = `<div class="guide" role="region" aria-labelledby="g-h"><h3 id="g-h">Photos done</h3><p>${photoCount(p)} of 4 suggested photos taken. Now fill in the details below.</p><button type="button" data-act="guide-end" id="guide-go">Finish</button></div>`;
+  else if (g && g.done) guide = `<div class="guide" role="region" aria-labelledby="g-h"><h3 id="g-h">Photos done</h3><p>${photoCount(p)} of 4 suggested photos taken. Now fill in the details below, or start the next painting.</p><div class="btn-row"><button type="button" data-act="guide-end" id="guide-go">Fill in the details</button><button type="button" data-act="new">+ Add another painting</button><button type="button" data-act="back">← All paintings</button></div></div>`;
   const slot = s => { const ph = activePhoto(p, s.k);
     return `<div class="slot" data-drop="photo" data-slot="${s.k}"><div class="slot-img">${ph ? `<img alt="${esc(s.label)}" data-blob="${ph.key}">` : '<span>No photo yet</span>'}</div>
       <p class="slot-label">${esc(s.label)}</p><div class="btn-row">
@@ -651,19 +680,20 @@ function secPurchase(p){
   const row = r => `<li><span>${esc(r.name)} <span class="muted small">· ${fmtSize(r.size)} · ${fmtDate(r.addedAt)}</span></span>
     <span class="btn-row"><a class="btn" data-blob-href="${r.key}" href="#" target="_blank" rel="noopener">View</a>
     <button type="button" data-act="${r.archived ? 'unarch-rec' : 'arch-rec'}" data-rid="${r.id}">${r.archived ? 'Restore' : 'Archive'}</button></span></li>`;
+  const archNote = '<p class="small muted">Archive hides a receipt; it is not deleted. Open “Archived receipts” to restore it.</p>';
   return `<section class="panel" aria-labelledby="h-pur"><h3 id="h-pur">Purchase &amp; receipts</h3><div class="grid2">
-    ${fld(p, 'owner.paid', 'Price he paid ($)', {money:true, hint:'Leave blank if unknown.'})}${fld(p, 'owner.paidDate', 'Date bought', {date:true})}
+    ${fld(p, 'owner.paid', 'Price paid ($)', {money:true, hint:'Leave blank if unknown.'})}${fld(p, 'owner.paidDate', 'Date bought', {date:true})}
     ${fld(p, 'owner.boughtWhere', 'Where bought', {hint:'Estate sale name, town, dealer.'})}</div>
     <div class="drop" data-drop="receipt"><p>Receipts and paperwork (pictures or PDF).</p><p class="small">On a computer, drag files here.</p>
     <div class="btn-row" style="justify-content:center"><button type="button" data-act="rec-pick">+ Add receipt file</button><button type="button" data-act="rec-cam"><span aria-hidden="true">📷</span> Photograph a receipt</button></div></div>
     <ul class="list" aria-label="Receipts">${live.map(row).join('') || '<li class="muted">No receipts yet.</li>'}</ul>
-    ${arch.length ? `<details><summary>Archived receipts (${arch.length})</summary><ul class="list">${arch.map(row).join('')}</ul></details>` : ''}</section>`;
+    ${arch.length ? `<details><summary>Archived receipts (${arch.length}): tap to open and restore</summary><ul class="list">${arch.map(row).join('')}</ul></details>` : ''}${live.length ? archNote : ''}</section>`;
 }
 function secResearch(p){
   const c = p.claude;
   if (!c) return `<section class="panel" aria-labelledby="h-res"><h3 id="h-res">Research results</h3>
     <p class="muted">No research results yet. Send this painting in a batch (Send &amp; receive tab). Results come back as a file you import.</p>
-    <p class="small muted">He can also search with Google Lens and type what he finds into “Additional information”.</p></section>`;
+    <p class="small muted">The owner can also search with Google Lens and type what it finds into “Additional information”.</p></section>`;
   const comps = (c.comparables || []);
   const hasVal = comps.length && c.valueLow != null;
   const rec = DECISIONS.find(d => d.k === c.recommendation);
@@ -682,32 +712,40 @@ function secResearch(p){
 }
 function secDecision(p){
   const rec = p.claude && DECISIONS.find(d => d.k === p.claude.recommendation);
-  return `<section class="panel" aria-labelledby="h-dec"><h3 id="h-dec">His decision</h3>
-    <p class="muted">${rec ? `Research recommends: <strong>${esc(rec.label)}</strong>. The choice is his.` : 'No recommendation yet. He can still decide.'}</p>
+  return `<section class="panel" aria-labelledby="h-dec"><h3 id="h-dec">The owner’s decision</h3>
+    <p class="muted">${rec ? `Research recommends: <strong>${esc(rec.label)}</strong>. The choice is the owner’s.` : 'No recommendation yet. The owner can still decide.'}</p>
     <fieldset><legend>What happens to this painting?</legend>
       <label class="radio"><input type="radio" name="decision" value="" data-field="owner.decision" ${!p.owner.decision ? 'checked' : ''}><span><strong>Undecided</strong></span></label>
       ${DECISIONS.map(d => `<label class="radio"><input type="radio" name="decision" value="${d.k}" data-field="owner.decision" ${p.owner.decision === d.k ? 'checked' : ''}><span><strong>${esc(d.label)}</strong><br><span class="muted small">${esc(d.desc)}</span></span></label>`).join('')}
     </fieldset>${fld(p, 'owner.decisionNote', 'Why (optional)', {area:true})}</section>`;
 }
+/* Draft entries (rule I1, draft exception, 11 Oct 2026): a new sale, cost or "where is it now" move is a
+   draft until the owner taps Record. A draft can be cancelled and is thrown away; once recorded it can only
+   be archived. Drafts are saved as you type, but they do not count in totals, status or batch files. */
+function draftBar(kind, e){
+  return `<div class="notice warn"><p><strong>Not recorded yet.</strong> Fill it in, then tap Record. Cancel throws it away. Until it is recorded it does not count in the totals and is not sent in a batch.</p>
+    <div class="btn-row"><button type="button" class="primary" data-act="rec-draft" data-kind="${kind}" data-eid="${e.id}">Record</button><button type="button" data-act="cancel-draft" data-kind="${kind}" data-eid="${e.id}">Cancel</button></div></div>`;
+}
+const ARCHIVE_NOTE = 'Hidden, not deleted. Restore it from “Archived entries” below.';
+const archLine = e => e.archived ? '' : `<p class="small muted">${ARCHIVE_NOTE}</p>`;
+/* The sale line states only what belongs to the sale. Profit or loss, with the price paid and every other
+   cost, is shown in “Costs and value” and on the Money tab (OI-55, option A). */
 function plText(p, s){
   if (s.soldPrice == null) return 'Not sold yet';
-  if (p.owner.paid == null) return `Sold for ${money(s.soldPrice)} · add price paid to see profit`;
-  const net = s.soldPrice - (s.fees || 0) - p.owner.paid;
-  return `${net >= 0 ? 'Profit' : 'Loss'} ${money(Math.abs(net))} (sold ${money(s.soldPrice)} − fees ${money(s.fees || 0)} − paid ${money(p.owner.paid)})`;
+  return `Net from this sale: ${money(s.soldPrice - (s.fees || 0))} (sold ${money(s.soldPrice)} − fees ${money(s.fees || 0)}). Profit or loss, after the price paid and other costs, is under “Costs and value” below.`;
 }
 function secSales(p){
   const card = s => { const i = (k, l, o={}) => { const id = `s-${s.id}-${k}`; const v = s[k] ?? '';
       return `<div class="field"><label for="${id}">${l}</label><input id="${id}" type="${o.date ? 'date' : 'text'}" data-sale="${s.id}" data-sfield="${k}" value="${esc(v)}"${o.money ? ' inputmode="decimal" data-money="1"' : ''} autocomplete="off"><p class="err" id="${id}-e" hidden></p></div>`; };
-    const net = s.soldPrice != null && p.owner.paid != null ? s.soldPrice - (s.fees || 0) - p.owner.paid : null;
-    return `<div class="sale"><div class="grid2">${i('venue', 'Where listed or sold')}${i('listedDate', 'Date listed', {date:true})}${i('asking', 'Asking price ($)', {money:true})}
+    return `<div class="sale" id="sale-${s.id}">${s.draft ? draftBar('sales', s) : ''}<div class="grid2">${i('venue', 'Where listed or sold')}${i('listedDate', 'Date listed', {date:true})}${i('asking', 'Asking price ($)', {money:true})}
       ${i('soldDate', 'Date sold', {date:true})}${i('soldPrice', 'Sold for ($)', {money:true})}${i('fees', 'Fees and commission ($)', {money:true})}</div>${i('notes', 'Notes')}
-      <p class="pl ${net == null ? '' : net >= 0 ? 'pos' : 'neg'}" data-pl="${s.id}">${esc(plText(p, s))}</p>
-      <button type="button" data-act="${s.archived ? 'unarch-sale' : 'arch-sale'}" data-sid="${s.id}">${s.archived ? 'Restore' : 'Archive this entry'}</button></div>`; };
+      <p class="pl" data-pl="${s.id}">${esc(plText(p, s))}</p>
+      ${s.draft ? '' : `<button type="button" data-act="${s.archived ? 'unarch-sale' : 'arch-sale'}" data-sid="${s.id}">${s.archived ? 'Restore' : 'Archive this entry'}</button>${archLine(s)}`}</div>`; };
   const live = p.sales.filter(s => !s.archived), arch = p.sales.filter(s => s.archived);
   return `<section class="panel" aria-labelledby="h-sal"><h3 id="h-sal">Listings &amp; sales</h3>
     ${live.map(card).join('') || '<p class="muted">Not listed or sold yet.</p>'}
     <button type="button" data-act="add-sale">+ Add a listing or sale</button>
-    ${arch.length ? `<details><summary>Archived entries (${arch.length})</summary>${arch.map(card).join('')}</details>` : ''}</section>`;
+    ${arch.length ? `<details><summary>Archived entries (${arch.length}): tap to open and restore</summary>${arch.map(card).join('')}</details>` : ''}</section>`;
 }
 /* ---------- Shared: one field inside a list item (costs, custody) ---------- */
 function subIn(name, s, k, label, o={}){
@@ -720,49 +758,56 @@ function subIn(name, s, k, label, o={}){
 }
 
 /* ---------- Where is it now? (custody, added v0.4.0) ---------- */
-const liveCus = p => (p.custody || []).filter(c => !c.archived && !c.backDate);
-const latest = a => a.slice().sort((x, y) => (y.outDate || y.addedAt || '').localeCompare(x.outDate || x.addedAt || ''))[0];
+/* Newest first: by the date it left, then by when the entry was added (a tie on the date is common). */
+const byNewest = (x, y) => (y.outDate || '').localeCompare(x.outDate || '') || (y.addedAt || '').localeCompare(x.addedAt || '');
+const liveCus = p => (p.custody || []).filter(c => !c.archived && !c.draft && !c.backDate);
+const latest = a => a.slice().sort(byNewest)[0];
+const custodyDateWarn = c => (c.backDate && c.outDate && c.backDate < c.outDate) ? 'The date it came back is before the date it left. Please check both dates.' : '';
 const outEntry = p => latest(liveCus(p).filter(c => c.purpose !== SOLD_PURPOSE));
 const soldEntry = p => latest(liveCus(p).filter(c => c.purpose === SOLD_PURPOSE));
 const isOut = p => !!outEntry(p);
 function custodyStatus(p){
   const o = outEntry(p), s = soldEntry(p);
-  if (o) return `Out of his hands: with ${o.who || 'someone not yet named'}${o.outDate ? ' since ' + o.outDate : ''}${o.purpose ? ' (' + o.purpose.toLowerCase() + ')' : ''}${o.dueDate ? '. Expected back ' + o.dueDate : ''}.`;
+  if (o) return `Not with the owner: with ${o.who || 'someone not yet named'}${o.outDate ? ' since ' + o.outDate : ''}${o.purpose ? ' (' + o.purpose.toLowerCase() + ')' : ''}${o.dueDate ? '. Expected back ' + o.dueDate : ''}.`;
   if (s) return `Sold: now with the buyer, ${s.who || 'not yet named'}${s.outDate ? ', since ' + s.outDate : ''}.`;
-  return 'In his hands. Nothing is recorded as out.';
+  return 'Owner has it.';
 }
 function secCustody(p){
-  const all = (p.custody || []).slice().sort((x, y) => (y.outDate || y.addedAt || '').localeCompare(x.outDate || x.addedAt || ''));
+  const all = (p.custody || []).slice().sort(byNewest);
   const live = all.filter(c => !c.archived), arch = all.filter(c => c.archived);
+  const openE = live.filter(c => c.draft || !c.backDate), past = live.filter(c => !c.draft && c.backDate);
   const grp = (c, kind, label) => { const slot = `cus-${kind}-${c.id}`;
     const phs = p.photos.filter(ph => ph.slot === slot && !ph.archived), old = p.photos.filter(ph => ph.slot === slot && ph.archived);
     return `<div class="cus-photos"><p class="slot-label">${label} (${phs.length})</p>
       ${phs.length ? `<div class="slots">${phs.map(ph => `<div class="slot"><div class="slot-img"><img alt="${esc(label)}" data-blob="${ph.key}"></div><div class="btn-row"><button type="button" data-act="arch-photo" data-pid="${ph.id}" aria-label="Archive photo: ${esc(label)}">Archive</button></div></div>`).join('')}</div>` : ''}
       <div class="btn-row"><button type="button" data-act="cap" data-slot="${slot}" aria-label="Take photo: ${esc(label)}"><span aria-hidden="true">📷</span> Take photo</button><button type="button" data-act="pick" data-slot="${slot}" aria-label="Choose file: ${esc(label)}">Choose file</button></div>
       ${old.length ? `<details><summary>Archived photos (${old.length})</summary>${old.map(ph => `<p class="small">${fmtDate(ph.addedAt)} <button type="button" data-act="unarch-photo" data-pid="${ph.id}">Restore</button></p>`).join('')}</details>` : ''}</div>`; };
-  const card = c => `<div class="sale" id="cus-${c.id}"><div class="grid2">
+  const card = c => `<div class="sale" id="cus-${c.id}">${c.draft ? draftBar('custody', c) : ''}<div class="grid2">
       ${subIn('custody', c, 'who', 'Who has it', {hint:'A person or a business.'})}${subIn('custody', c, 'contact', 'How to reach them', {hint:'Phone, email or address.'})}
       ${subIn('custody', c, 'purpose', 'Why', {opts:PURPOSES})}${subIn('custody', c, 'outDate', 'Date it left', {date:true})}
       ${subIn('custody', c, 'dueDate', 'Date expected back', {date:true})}${subIn('custody', c, 'backDate', 'Date it came back', {date:true, hint:'Fill this in when it is back. Leave it blank while it is out.'})}</div>
+      <p class="err" id="cus-w-${c.id}"${custodyDateWarn(c) ? '' : ' hidden'}>${esc(custodyDateWarn(c))}</p>
       ${subIn('custody', c, 'outCondition', 'Condition when it left', {area:true})}
       ${grp(c, 'out', 'Photos when it left')}
       ${grp(c, 'rcpt', 'Photo of a signed receipt or agreement')}
       ${subIn('custody', c, 'backCondition', 'Condition when it came back', {area:true})}
       ${grp(c, 'back', 'Photos when it came back')}
       ${subIn('custody', c, 'notes', 'Notes', {area:true})}
-      <button type="button" data-act="${c.archived ? 'unarch-cus' : 'arch-cus'}" data-cid="${c.id}">${c.archived ? 'Restore' : 'Archive this entry'}</button></div>`;
+      ${c.draft ? '' : `<button type="button" data-act="${c.archived ? 'unarch-cus' : 'arch-cus'}" data-cid="${c.id}">${c.archived ? 'Restore' : 'Archive this entry'}</button>${archLine(c)}`}</div>`;
+  const pastLine = c => `${c.who || 'Someone'} · ${c.purpose || 'no reason given'} · left ${c.outDate || '?'} · back ${c.backDate} · Returned`;
   return `<section class="panel" aria-labelledby="h-cus"><h3 id="h-cus">Where is it now?</h3>
     <p class="notice${isOut(p) ? ' warn' : ''}" id="cus-status">${esc(custodyStatus(p))}</p>
-    <p class="muted small">Record every time this painting leaves his hands: a dealer looking at it, an appraiser, an auction house, a framer or a buyer. Take photos when it leaves and when it comes back. They are the best proof of its condition.</p>
-    ${live.map(card).join('')}
-    <button type="button" data-act="add-cus">+ It is leaving his hands</button>
-    ${arch.length ? `<details><summary>Archived entries (${arch.length})</summary>${arch.map(card).join('')}</details>` : ''}</section>`;
+    <p class="muted small">Record every time this painting leaves the owner: a dealer looking at it, an appraiser, an auction house, a framer or a buyer. Take photos when it leaves and when it comes back. They are the best proof of its condition.</p>
+    ${openE.map(card).join('')}
+    <button type="button" data-act="add-cus">+ Painting is leaving the owner</button>
+    ${past.length ? `<h4>Past moves (${past.length})</h4><p class="small muted">Trips that are finished. Tap one to open it.</p>${past.map(c => `<details><summary>${esc(pastLine(c))}</summary>${card(c)}</details>`).join('')}` : ''}
+    ${arch.length ? `<details><summary>Archived entries (${arch.length}): tap to open and restore</summary>${arch.map(card).join('')}</details>` : ''}</section>`;
 }
 
 /* ---------- Money (values and costs, added v0.4.0) ---------- */
 const sumOf = a => a.reduce((x, y) => x + (Number(y) || 0), 0);
 function moneyOf(p){
-  const sales = p.sales.filter(s => !s.archived), costs = (p.costs || []).filter(c => !c.archived);
+  const sales = p.sales.filter(s => !s.archived && !s.draft), costs = (p.costs || []).filter(c => !c.archived && !c.draft);
   const paid = p.owner.paid, other = sumOf(costs.map(c => c.amount)), fees = sumOf(sales.map(s => s.fees));
   const soldList = sales.filter(s => s.soldPrice != null), sold = soldList.length ? sumOf(soldList.map(s => s.soldPrice)) : null;
   const spent = (paid || 0) + other + fees, c = p.claude;
@@ -774,24 +819,25 @@ function moneySummary(p){
   const m = moneyOf(p);
   return `<p><strong>Spent so far:</strong> ${money(m.spent)} <span class="muted small">(paid ${money(m.paid)} + costs ${money(m.other)} + sale fees ${money(m.fees)})${m.paid == null ? ' · price paid not entered' : ''}</span></p>
     <p><strong>Sold for:</strong> ${m.isSold ? money(m.sold) : 'Not sold yet'}</p>
-    <p class="pl ${m.isSold ? (m.net >= 0 ? 'pos' : 'neg') : ''}"><strong>Result so far:</strong> ${m.isSold ? plWord(m.net) : 'Not sold yet: ' + money(m.spent) + ' spent'}</p>`;
+    <p class="pl ${m.isSold ? (m.net >= 0 ? 'pos' : 'neg') : ''}"><strong>Result so far:</strong> ${m.isSold ? plWord(m.net) : 'Not sold yet: ' + money(m.spent) + ' spent'}</p>
+    <p class="small muted">${m.isSold ? 'Profit or loss = sold for, minus the price paid, other costs and sale fees.' : 'Profit or loss appears once a sale is recorded.'}</p>`;
 }
 function secMoney(p){
   const m = moneyOf(p), all = p.costs || [], live = all.filter(c => !c.archived), arch = all.filter(c => c.archived);
-  const card = c => `<div class="sale"><div class="grid2">${subIn('costs', c, 'type', 'What it was for', {opts:COST_TYPES})}${subIn('costs', c, 'amount', 'Amount ($)', {money:true})}
+  const card = c => `<div class="sale" id="cost-${c.id}">${c.draft ? draftBar('costs', c) : ''}<div class="grid2">${subIn('costs', c, 'type', 'What it was for', {opts:COST_TYPES})}${subIn('costs', c, 'amount', 'Amount ($)', {money:true})}
       ${subIn('costs', c, 'date', 'Date', {date:true})}${subIn('costs', c, 'note', 'Note')}</div>
-      <button type="button" data-act="${c.archived ? 'unarch-cost' : 'arch-cost'}" data-cid="${c.id}">${c.archived ? 'Restore' : 'Archive this cost'}</button></div>`;
-  return `<section class="panel" aria-labelledby="h-mon"><h3 id="h-mon">Money</h3>
+      ${c.draft ? '' : `<button type="button" data-act="${c.archived ? 'unarch-cost' : 'arch-cost'}" data-cid="${c.id}">${c.archived ? 'Restore' : 'Archive this cost'}</button>${archLine(c)}`}</div>`;
+  return `<section class="panel" aria-labelledby="h-mon"><h3 id="h-mon">Costs and value</h3>
     <h4>What it may be worth</h4>
     <p><strong>Research estimate:</strong> ${m.est ? `${money(m.est.lo)} – ${money(m.est.hi)} <span class="muted small">(from cited comparable sales; an estimate is not an appraisal)</span>` : 'None yet'}</p>
     <div class="grid2">${fld(p, 'owner.appraisedValue', 'Appraised value ($)', {money:true, hint:'Only from a formal appraisal by a qualified appraiser.'})}${fld(p, 'owner.appraisedDate', 'Date appraised', {date:true})}
     ${fld(p, 'owner.appraisedBy', 'Appraised by', {hint:'Name and credentials, for example ASA, AAA or ISA.'})}</div>
     <p><strong>Auction or sale price:</strong> taken from “Listings &amp; sales” above.</p>
     <h4>What has been spent on it</h4>
-    <p>Price he paid: <strong>${money(m.paid)}</strong> <span class="muted small">(entered under “Purchase &amp; receipts”)</span></p>
+    <p>Price paid: <strong>${money(m.paid)}</strong> <span class="muted small">(entered under “Purchase &amp; receipts”)</span></p>
     ${live.map(card).join('') || '<p class="muted">No other costs yet.</p>'}
     <button type="button" data-act="add-cost">+ Add a cost</button>
-    ${arch.length ? `<details><summary>Archived costs (${arch.length})</summary>${arch.map(card).join('')}</details>` : ''}
+    ${arch.length ? `<details><summary>Archived costs (${arch.length}): tap to open and restore</summary>${arch.map(card).join('')}</details>` : ''}
     <h4>For this painting</h4><div id="money-sum" aria-live="polite">${moneySummary(p)}</div></section>`;
 }
 function viewMoney(){
@@ -800,10 +846,12 @@ function viewMoney(){
   const ttl = p => (p.owner.title || '').trim();
   list.sort((a, b) => (!ttl(a.p) - !ttl(b.p)) || ttl(a.p).localeCompare(ttl(b.p), undefined, {sensitivity:'base', numeric:true}) || a.p.createdAt.localeCompare(b.p.createdAt));
   let runSpent = 0, runNet = 0;
-  list.forEach(r => { runSpent += r.m.spent; runNet += r.m.net; r.runSpent = runSpent; r.runNet = runNet; });
+  /* Running result adds up SOLD paintings only: money spent on a painting that is not sold yet is not a loss. */
+  list.forEach(r => { runSpent += r.m.spent; runNet += r.m.isSold ? r.m.net : 0; r.runSpent = runSpent; r.runNet = runNet; });
   const T = {paid:sumOf(list.map(r => r.m.paid)), noPaid:list.filter(r => r.m.paid == null).length, other:sumOf(list.map(r => r.m.other)), fees:sumOf(list.map(r => r.m.fees)),
     spent:sumOf(list.map(r => r.m.spent)), sold:sumOf(list.map(r => r.m.sold)), nSold:list.filter(r => r.m.isSold).length};
-  T.net = T.sold - T.spent;
+  const soldRows = list.filter(r => r.m.isSold), unsoldRows = list.filter(r => !r.m.isSold);
+  T.netSold = sumOf(soldRows.map(r => r.m.net)); T.spentUnsold = sumOf(unsoldRows.map(r => r.m.spent));
   const unsold = list.filter(r => !r.m.isSold), withEst = unsold.filter(r => r.m.est), withApp = unsold.filter(r => r.m.appraised != null);
   const estLo = sumOf(withEst.map(r => r.m.est.lo)), estHi = sumOf(withEst.map(r => r.m.est.hi)), appSum = sumOf(withApp.map(r => r.m.appraised));
   const nSample = list.filter(r => r.p.sample).length;
@@ -812,18 +860,19 @@ function viewMoney(){
   const est = r => r.m.est ? `${money(r.m.est.lo)}–${money(r.m.est.hi)}` : '—';
   const res = r => r.m.isSold ? `<span class="pl ${r.m.net >= 0 ? 'pos' : 'neg'}">${plWord(r.m.net)}</span>` : `<span class="muted">Not sold</span>`;
   return `<section aria-labelledby="h-money"><h2 id="h-money">Money</h2>
-  <p class="muted">Totals for every painting that is not archived.${nSample ? ` <strong>Includes ${nSample} sample painting${nSample === 1 ? '' : 's'}</strong> (test data).` : ''} Figures are typed in on each painting’s page.</p>
+  <p class="muted">Totals for every painting that is not archived.${nSample ? ` <strong>Includes ${nSample} sample painting${nSample === 1 ? '' : 's'}</strong> (test data).` : ''} Figures are typed in on each painting’s page, in its <strong>Costs and value</strong> section. Archived sales and costs are left out.</p>
   <section class="panel" aria-labelledby="h-tot-spent"><h3 id="h-tot-spent">Money in and out</h3><dl class="totals">
     ${box('Price paid', money(T.paid), T.noPaid ? `${T.noPaid} painting${T.noPaid === 1 ? ' has' : 's have'} no price entered` : '')}
     ${box('Other costs', money(T.other), 'Appraisals, research, framing, shipping…')}
     ${box('Sale fees', money(T.fees))}
     ${box('Total spent', money(T.spent))}
     ${box('Sold for', money(T.sold), `${T.nSold} painting${T.nSold === 1 ? '' : 's'} sold`)}
-    ${box('Result so far', `<span class="pl ${T.net >= 0 ? 'pos' : 'neg'}">${plWord(T.net)}</span>`, 'Sold for, minus everything spent on every painting')}</dl></section>
+    ${box('Result on sold paintings', soldRows.length ? `<span class="pl ${T.netSold >= 0 ? 'pos' : 'neg'}">${plWord(T.netSold)}</span>` : '—', soldRows.length ? `${soldRows.length} painting${soldRows.length === 1 ? '' : 's'} sold: sold for, minus everything spent on ${soldRows.length === 1 ? 'it' : 'them'}` : 'No painting is sold yet')}
+    ${box('Spent on paintings not sold yet', money(T.spentUnsold), 'Not a loss: the paintings are still owned')}</dl></section>
   <section class="panel" aria-labelledby="h-tot-val"><h3 id="h-tot-val">What the unsold paintings may be worth</h3>
     <p class="notice">These are <strong>estimates, not appraisals</strong>, and they are a range, not a promise.</p><dl class="totals">
     ${box('Research estimates', withEst.length ? `${money(estLo)} – ${money(estHi)}` : '—', `From ${withEst.length} painting${withEst.length === 1 ? '' : 's'} with cited comparable sales. <strong>${unsold.length - withEst.length}</strong> unsold painting${unsold.length - withEst.length === 1 ? ' has' : 's have'} no estimate and ${unsold.length - withEst.length === 1 ? 'is' : 'are'} not counted.`)}
-    ${box('Formal appraisals', withApp.length ? money(appSum) : '—', `${withApp.length} unsold painting${withApp.length === 1 ? '' : 's'} appraised`)}</dl></section>
+    ${box('Formal appraisals', withApp.length ? money(appSum) : '—', `${withApp.length} unsold painting${withApp.length === 1 ? '' : 's'} appraised. Appraisals are counted for unsold paintings only.`)}</dl></section>
   <section class="panel" aria-labelledby="h-each"><h3 id="h-each">Painting by painting</h3>
     <p class="muted small">In alphabetical order of title (untitled paintings come last). The running columns add up as you go down the list.</p>
     <div class="money-table-wrap"><table><caption class="sr-only">Money for each painting, in alphabetical order of title, with running totals</caption><thead><tr>
@@ -843,9 +892,8 @@ function refreshDerived(p){
   const t = $('#detail-title'); if (t) t.textContent = p.owner.title || 'Untitled painting';
   const ms = $('#money-sum'); if (ms) ms.innerHTML = moneySummary(p);
   const cs = $('#cus-status'); if (cs) { cs.textContent = custodyStatus(p); cs.className = 'notice' + (isOut(p) ? ' warn' : ''); }
-  p.sales.forEach(s => { const el = $(`[data-pl="${s.id}"]`); if (!el) return; el.textContent = plText(p, s);
-    const net = s.soldPrice != null && p.owner.paid != null ? s.soldPrice - (s.fees || 0) - p.owner.paid : null;
-    el.className = 'pl ' + (net == null ? '' : net >= 0 ? 'pos' : 'neg'); });
+  p.sales.forEach(s => { const el = $(`[data-pl="${s.id}"]`); if (!el) return; el.textContent = plText(p, s); });
+  (p.custody || []).forEach(c => { const el = $(`#cus-w-${c.id}`); if (!el) return; const w = custodyDateWarn(c); el.textContent = w; el.hidden = !w; });
 }
 
 /* ---------- Transfer ---------- */
@@ -920,11 +968,15 @@ function blobToDataUrl(b){ return new Promise((res, rej) => { const r = new File
 async function buildBatch(mode){
   const list = exportList(mode); const out = [];
   for (const p of list){ const c = JSON.parse(JSON.stringify(p));
+    /* Drafts (new entries not yet recorded) are not sent, nor are the photos that belong to them. */
+    const draftIds = (c.custody || []).filter(e => e.draft).map(e => e.id);
+    for (const name of ['sales', 'costs', 'custody']) c[name] = (c[name] || []).filter(e => !e.draft);
+    c.photos = c.photos.filter(ph => !draftIds.some(id => (ph.slot || '').endsWith('-' + id)));
     for (const x of c.photos.concat(c.receipts)) { const r = await idb.get('blobs', x.key); x.dataUrl = r ? await blobToDataUrl(r.blob) : null; }
     out.push(c); }
   return {format:'paintscout-batch', formatVersion:FORMAT_VERSION, appVersion:APP_VERSION, exportedAt:nowIso(), device:device() || 'unnamed device', count:out.length, paintings:out};
 }
-function fileName(prefix){ const d = new Date(); const s = d.toISOString().slice(0, 16).replace(/[-:T]/g, ''); return `PaintScout_${prefix}_${(device() || 'device').replace(/[^\w-]+/g, '-')}_${s}.json`; }
+function fileName(prefix){ const d = new Date(); const s = localStamp(d); return `PaintScout_${prefix}_${(device() || 'device').replace(/[^\w-]+/g, '-')}_${s}.json`; }
 function downloadFile(file){ const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
 async function doExport(how){
   if (!device()) { status('Choose which device this is first (top of this page).'); $('#dev').focus(); return; }
@@ -1001,7 +1053,7 @@ function previewDialog(){
           <label class="radio"><input type="radio" name="c-${ui}-${ci}" value="local" data-conf="${ui}:${ci}" checked><span>Keep this device’s: ${esc(show(c.a))}</span></label>
           <label class="radio"><input type="radio" name="c-${ui}-${ci}" value="inc" data-conf="${ui}:${ci}"><span>Use incoming: ${esc(show(c.b))}</span></label>`).join('')}</fieldset>`).join('')}`;
   } else {
-    h = `<h2 id="dlg-title">Check research results</h2><p>From ${esc(P.data.generatedBy || 'research batch')}, ${fmtDate(P.data.generatedAt)}. Only research fields change — his own entries are never touched.</p>
+    h = `<h2 id="dlg-title">Check research results</h2><p>From ${esc(P.data.generatedBy || 'research batch')}, ${fmtDate(P.data.generatedAt)}. Only research fields change — the owner’s own entries are never touched.</p>
       <table><thead><tr><th scope="col">Painting</th><th scope="col">Recommended</th><th scope="col">Estimate</th></tr></thead><tbody>
       ${P.matched.map(({loc, r}) => { const d = DECISIONS.find(x => x.k === r.recommendation); const ok = (r.comparables || []).length && r.valueLow != null;
         return `<tr><td>${esc(loc.owner.title || 'Untitled')}</td><td>${esc(d ? d.label : '—')}</td><td>${ok ? `${money(r.valueLow)}–${money(r.valueHigh)}` : 'No comparables'}</td></tr>`; }).join('')}</tbody></table>
@@ -1014,25 +1066,33 @@ function openDialog(h){ const d = $('#dlg'); $('#dlg-body').innerHTML = h; if (!
 function msgDialog(title, text){ openDialog(`<h2 id="dlg-title">${esc(title)}</h2><p>${esc(text)}</p><div class="btn-row"><button type="button" class="primary" data-act="close-dlg">OK</button></div>`); }
 async function dataUrlToBlob(u){ return (await fetch(u)).blob(); }
 async function storeBlobs(items){ for (const x of items){ if (x.dataUrl) { const blob = await dataUrlToBlob(x.dataUrl); if (!x.key) x.key = uid('b-'); await idb.put('blobs', {key:x.key, blob}); } delete x.dataUrl; } }
-async function snapshot(label, addedIds){
-  await idb.put('snapshots', {createdAt:nowIso(), label, addedIds, paintings:JSON.parse(JSON.stringify(S.paintings))});
+/* Undo records (v0.4.4, OI-60). Before v0.4.4 a snapshot held a copy of ALL paintings, and Undo wrote every one
+   back, which also erased anything entered after the import. Now a record holds only what that import can change:
+   - kind 'results': each matched painting's earlier research (`claude`) and nothing else;
+   - kind 'batch': a full copy of each EXISTING painting the import updates (`before`), the paintings it added
+     (`addedIds`) and, once applied, `after` = each painting's updatedAt right after the import. */
+const clone = v => JSON.parse(JSON.stringify(v === undefined ? null : v));
+async function saveSnapshot(rec){
+  await idb.put('snapshots', Object.assign({createdAt:nowIso(), addedIds:[]}, rec));
   const all = await idb.all('snapshots'); all.sort((a, b) => a.id - b.id);
   for (const s of all.slice(0, Math.max(0, all.length - 10))) await idb.del('snapshots', s.id);
 }
+async function latestSnapshot(){ const all = await idb.all('snapshots'); all.sort((a, b) => b.id - a.id); return all[0]; }
 async function applyImport(){
   const P = S.pending; if (!P) return; $$('#dlg [data-act=apply-import]').forEach(b => b.disabled = true); status('Importing…');
   try {
     if (P.type === 'batch') {
-      await snapshot('Batch from ' + P.data.device, P.adds.map(p => p.id));
+      await saveSnapshot({label:'Batch from ' + P.data.device, kind:'batch', addedIds:P.adds.map(p => p.id), items:P.updates.map(u => ({id:u.loc.id, before:clone(u.loc)}))});
       for (const p of P.adds){ normalize(p); await storeBlobs(p.photos.concat(p.receipts)); S.paintings.unshift(p); await idb.put('paintings', p); }
       for (const u of P.updates){ const o = normalize(u.loc);
         u.auto.forEach(a => a.set(o)); u.conflicts.filter(c => c.choice === 'inc').forEach(c => c.set(o));
         await storeBlobs(u.photos.concat(u.receipts)); o.photos.push(...u.photos); o.receipts.push(...u.receipts);
         for (const name of Object.keys(u.subs)) o[name].push(...u.subs[name]);
         if (u.claude) o.claude = u.inc.claude; o.updatedAt = nowIso(); await idb.put('paintings', o); }
+      const snap = await latestSnapshot(); if (snap) { snap.after = Object.fromEntries(P.updates.map(u => [u.loc.id, u.loc.updatedAt])); await idb.put('snapshots', snap); }
       status(`Imported: ${P.adds.length} new, ${P.updates.length} updated.`);
     } else {
-      await snapshot('Research results', []);
+      await saveSnapshot({label:'Research results', kind:'results', items:P.matched.map(({loc}) => ({id:loc.id, claude:clone(loc.claude)}))});
       for (const {loc, r} of P.matched){ const {id, ...rest} = r; loc.claude = {...rest, generatedBy:P.data.generatedBy || 'research batch', processedAt:P.data.generatedAt || nowIso()}; loc.updatedAt = nowIso(); await idb.put('paintings', loc); }
       status(`Research results added to ${P.matched.length} paintings.`);
     }
@@ -1042,17 +1102,35 @@ async function applyImport(){
 async function undoImport(){
   const all = (await idb.all('snapshots')).filter(s => !s.undone).sort((a, b) => b.id - a.id); const s = all[0];
   if (!s) return msgDialog('Nothing to undo', 'There is no import to undo on this device.');
-  openDialog(`<h2 id="dlg-title">Undo “${esc(s.label)}”?</h2><p>From ${fmtDate(s.createdAt)}. Paintings go back to how they were before that import. Paintings the import added are archived, not deleted.</p>
+  const what = s.kind === 'results' ? 'Each painting’s earlier research is put back. Nothing else changes.'
+    : s.kind === 'batch' ? 'Only what that import changed is taken back. Paintings you edited after the import are left as they are.'
+    : s.label === 'Research results' ? 'Each painting’s earlier research is put back. Nothing else changes.'
+    : 'This is an older import record, so it can only archive the paintings that import added. Nothing else changes.';
+  openDialog(`<h2 id="dlg-title">Undo “${esc(s.label)}”?</h2><p>From ${fmtDate(s.createdAt)}. ${what} Paintings the import added are archived, not deleted. You can undo the undo straight afterwards.</p>
     <div class="btn-row"><button type="button" class="primary" data-act="undo-yes" data-sid="${s.id}">Undo it</button><button type="button" data-act="close-dlg">Cancel</button></div>`);
 }
 async function undoYes(sid){
   const s = await idb.get('snapshots', Number(sid)); if (!s) return;
-  const before = new Map(s.paintings.map(p => [p.id, p]));
-  for (const p of s.paintings) await idb.put('paintings', p);
-  for (const id of s.addedIds) { const p = S.paintings.find(x => x.id === id); if (p && !before.has(id)) { p.archived = true; p.archivedReason = 'Import undone ' + nowIso(); await idb.put('paintings', p); } }
+  const find = id => S.paintings.find(x => x.id === id);
+  let restored = 0, left = 0, note = '';
+  if (s.kind === 'results' || (!s.kind && s.label === 'Research results')) {
+    /* Research results only ever change `claude`: put back each painting's earlier research, nothing else. */
+    const items = s.kind ? s.items : s.paintings.map(p => ({id:p.id, claude:p.claude}));
+    if (s.kind) await saveSnapshot({label:`Before undoing “${s.label}”`, kind:'results', items:items.map(it => find(it.id) ? {id:it.id, claude:clone(find(it.id).claude)} : null).filter(Boolean)});
+    for (const it of items) { const p = find(it.id); if (!p) continue; p.claude = it.claude; p.updatedAt = nowIso(); await idb.put('paintings', p); restored++; }
+  } else if (s.kind === 'batch') {
+    /* A painting the import updated goes back to how it was ONLY if nobody has changed it since the import. */
+    const todo = s.items.filter(it => find(it.id) && s.after && find(it.id).updatedAt === s.after[it.id]);
+    left = s.items.filter(it => find(it.id)).length - todo.length;
+    await saveSnapshot({label:`Before undoing “${s.label}”`, kind:'batch', items:todo.map(it => ({id:it.id, before:clone(find(it.id))}))});
+    for (const it of todo) { await idb.put('paintings', normalize(clone(it.before))); restored++; }
+    S.paintings = (await idb.all('paintings')).map(normalize);
+    const snap = await latestSnapshot(); if (snap && snap.kind === 'batch') { snap.after = Object.fromEntries(todo.map(it => [it.id, (find(it.id) || {}).updatedAt])); await idb.put('snapshots', snap); }
+  } else { note = ' This older import record could only archive the paintings it added.'; }
+  for (const id of s.addedIds || []) { const p = find(id); if (p && !p.archived) { p.archived = true; p.archivedReason = 'Import undone ' + nowIso(); await idb.put('paintings', p); } }
   s.undone = true; await idb.put('snapshots', s);
   S.paintings = (await idb.all('paintings')).map(normalize).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  $('#dlg').close(); status('Import undone.'); render(false);
+  $('#dlg').close(); status(`Import undone: ${restored} painting${restored === 1 ? '' : 's'} put back${left ? `, ${left} left as they are because they were edited after the import` : ''}.${note}`); render(false);
 }
 
 /* ---------- Samples (V3 test copy) ---------- */
@@ -1102,15 +1180,28 @@ function sampleResults(){
 function viewHelp(){
   return `<h2>Help</h2><section class="panel"><h3>How it works</h3><ol>
     <li><strong>New painting</strong> → the guide asks for 4 photos: front, front close-up, back, back close-up.</li>
-    <li>Fill in the details, what he paid, and add receipts. <strong>Search with Google Lens</strong> on the painting’s page can help; type what it finds into the notes.</li>
+    <li>Fill in the details, the price paid, and add receipts. <strong>Search with Google Lens</strong> on the painting’s page can help; type what it finds into “Additional information”. After you paste, tap outside the box and wait for “Saved”.</li>
     <li><strong>Send &amp; receive</strong>: choose which phone this is, tap <strong>Share…</strong>, then Drive, then the PaintScout folder. Then tell the app whether it reached Drive. When the red or gold bar at the top says time to send, do this before taking more photos.</li>
     <li>Research results come back as a file. Open it in <strong>Send &amp; receive</strong>; check the preview; apply.</li>
-    <li>He reads the results and chooses a decision. Record listings and sales as they happen.</li>
-    <li><strong>Where is it now?</strong> Every time a painting leaves his hands (a dealer, an appraiser, an auction house, a framer, a buyer), tap <strong>It is leaving his hands</strong> on its page. Write who has it and why, and take photos when it leaves and when it comes back.</li>
-    <li><strong>Money</strong>: on each painting’s page, add costs (appraisal fees, framing, shipping…) and any formal appraised value. The <strong>Money</strong> tab adds everything up, painting by painting, with running totals.</li></ol></section>
+    <li>The owner reads the results and chooses a decision. Record listings and sales as they happen.</li>
+    <li><strong>Where is it now?</strong> Every time a painting leaves the owner (a dealer, an appraiser, an auction house, a framer, a buyer), tap <strong>Painting is leaving the owner</strong> on its page. Write who has it and why, take photos when it leaves and when it comes back, then tap <strong>Record</strong>. Tapped it by mistake? Tap <strong>Cancel</strong>.</li>
+    <li><strong>Costs and value</strong>: on each painting’s page, add costs (appraisal fees, framing, shipping…) and any formal appraised value. The <strong>Money</strong> tab adds everything up, painting by painting, with running totals.</li>
+    <li>When you finish a painting, tap <strong>+ Add another painting</strong> at the bottom of its page, or <strong>← All paintings</strong> to see the list.</li></ol></section>
+  <section class="panel"><h3>Words used in this app</h3><dl>
+    <dt><strong>Collection</strong></dt><dd>The first tab: the list of all your paintings. The button <strong>← All paintings</strong> on a painting’s page takes you back to it.</dd>
+    <dt><strong>Money tab</strong></dt><dd>The tab with totals for every painting.</dd>
+    <dt><strong>Costs and value</strong></dt><dd>The section on one painting’s page where you enter its costs and its appraised value.</dd>
+    <dt><strong>Net from this sale</strong></dt><dd>What one sale brought in: the sold price minus its fees.</dd>
+    <dt><strong>Profit or loss</strong></dt><dd>Shown only for a sold painting, after the price paid, every other cost and the sale fees. Money spent on a painting not sold yet is “spent”, not a loss.</dd>
+    <dt><strong>Estimate</strong></dt><dd>A value range from cited sales. It is not an appraisal.</dd>
+    <dt><strong>Appraised value</strong></dt><dd>The figure from a formal appraisal by a qualified appraiser.</dd>
+    <dt><strong>Record</strong> and <strong>Cancel</strong></dt><dd>On a new sale, cost or move: Record keeps it; Cancel throws it away. Nothing else is ever thrown away.</dd>
+    <dt><strong>Archive</strong> and <strong>Restore</strong></dt><dd>Archive hides something that was recorded. It is not deleted. Restore brings it back.</dd>
+    <dt><strong>Not with the owner</strong></dt><dd>The painting is with someone else, for example a dealer or a buyer.</dd>
+    <dt><strong>Past moves</strong></dt><dd>The finished trips of a painting that has come back.</dd></dl></section>
   <section class="panel"><h3>Painting numbers</h3><p>Each painting gets a number such as <strong>PBP-001</strong>. The letters say which device it was made on: PBP Paul’s phone, PBC Paul’s computer, CBP Cameron’s phone, CBC Cameron’s computer, O other. Numbers made on different devices never clash. Choose the device once, on the Send &amp; receive tab or when you start the first painting.</p></section>
   <section class="panel"><h3>What the numbers mean</h3><p>An <strong>estimate</strong> comes from comparable sales that are listed with it. It is not an <strong>appraisal</strong> — that is a formal valuation by a qualified professional. With no comparable sales, no number is shown.</p></section>
-  <section class="panel"><h3>Nothing is deleted</h3><p>Paintings, photos, receipts and sales can only be archived, and archived items can be restored. Every import can be undone.</p></section>
+  <section class="panel"><h3>Nothing recorded is deleted</h3><p>Paintings, photos, receipts, sales, costs and moves can only be archived, and archived items can be restored. One exception: a new entry, or a new painting with nothing in it, that you cancel before recording it is thrown away. The last import can be undone: research results are put back as they were, and paintings you changed after an import are left as they are.</p></section>
   <section class="panel"><h3>Keep your data safe</h3><p>Everything is stored in this browser on this device. Send a batch regularly so a copy exists in Drive. On iPhone, use Share → “Add to Home Screen”.</p></section>
   <p class="small muted mono">Version ${APP_VERSION} · ${APP_DATE}</p>`;
 }
@@ -1218,11 +1309,21 @@ async function onAct(e){
       await createPainting(); break; }
     case 'dev-new-go': { const v = ($('#dev-new') || {}).value || ''; if (!/\((PBP|PBC|CBP|CBC|O)\)$/.test(v)) { status('Choose a device from the list first.'); $('#dev-new').focus(); break; }
       lsSet('ps-device', v); $('#dlg').close(); await createPainting(); break; }
-    case 'add-cost': p.costs.push({id:uid('co-'), type:'', amount:null, date:'', note:'', archived:false, addedAt:nowIso()}); touch(p); render(false); { const f = $$('[data-sub=costs][data-sfield=type]').pop(); if (f) f.focus(); } break;
-    case 'arch-cost': case 'unarch-cost': { const c = p.costs.find(x => x.id === b.dataset.cid); c.archived = a === 'arch-cost'; touch(p); render(false); status(c.archived ? 'Cost archived (not deleted).' : 'Cost restored.'); break; }
-    case 'add-cus': { const c = {id:uid('cu-'), who:'', contact:'', purpose:'', outDate:new Date().toISOString().slice(0, 10), dueDate:'', backDate:'', outCondition:'', backCondition:'', notes:'', archived:false, addedAt:nowIso()};
+    case 'add-cost': p.costs.push({id:uid('co-'), type:'', amount:null, date:'', note:'', archived:false, draft:true, addedAt:nowIso()}); touch(p); render(false); { const f = $$('[data-sub=costs][data-sfield=type]').pop(); if (f) f.focus(); } break;
+    case 'arch-cost': case 'unarch-cost': { const c = p.costs.find(x => x.id === b.dataset.cid); c.archived = a === 'arch-cost'; touch(p); keepScroll(() => render(false)); status(c.archived ? 'Cost archived. Open “Archived costs” on this page to restore it.' : 'Cost restored.'); break; }
+    case 'add-cus': { const c = {id:uid('cu-'), who:'', contact:'', purpose:'', outDate:localDate(), dueDate:'', backDate:'', outCondition:'', backCondition:'', notes:'', archived:false, draft:true, addedAt:nowIso()};
       p.custody.push(c); touch(p); render(false); focusId(`custody-${c.id}-who`); break; }
-    case 'arch-cus': case 'unarch-cus': { const c = p.custody.find(x => x.id === b.dataset.cid); c.archived = a === 'arch-cus'; touch(p); render(false); status(c.archived ? 'Entry archived (not deleted).' : 'Entry restored.'); break; }
+    case 'arch-cus': case 'unarch-cus': { const c = p.custody.find(x => x.id === b.dataset.cid); c.archived = a === 'arch-cus'; touch(p); keepScroll(() => render(false)); status(c.archived ? 'Entry archived. Open “Archived entries” on this page to restore it.' : 'Entry restored.'); break; }
+    case 'rec-draft': { const e = (p[b.dataset.kind] || []).find(x => x.id === b.dataset.eid); if (!e) break; e.draft = false; e.recordedAt = nowIso(); touch(p); keepScroll(() => render(false)); status('Recorded.'); break; }
+    case 'cancel-draft': { const kind = b.dataset.kind, e = (p[kind] || []).find(x => x.id === b.dataset.eid); if (!e) break;
+      if (draftHasContent(p, kind, e)) { openDialog(`<h2 id="dlg-title">Throw this entry away?</h2><p>It has information or photos in it. Cancel throws them all away. Nothing about it was recorded. To keep it, tap Keep it and then Record.</p>
+        <div class="btn-row"><button type="button" class="primary" data-act="cancel-draft-yes" data-kind="${kind}" data-eid="${e.id}">Throw it away</button><button type="button" data-act="close-dlg">Keep it</button></div>`); break; }
+      discardDraft(p, kind, e.id); break; }
+    case 'cancel-draft-yes': { const kind = b.dataset.kind; $('#dlg').close(); discardDraft(p, kind, b.dataset.eid); break; }
+    case 'cancel-painting': { if (!p || !paintingIsEmpty(p)) break; const num = shownNum(p); S.paintings = S.paintings.filter(x => x.id !== p.id); await idb.del('paintings', p.id); S.current = null; S.guide = null;
+      status(`Painting ${num} cancelled. Its number is skipped.`); go('collection'); break; }
+    case 'unarchive-card': { const q = S.paintings.find(x => x.id === b.dataset.id); if (!q) break; q.archived = false; touch(q); keepScroll(() => render(false));
+      status(`Restored ${shownNum(q)}. It is back in the Collection.`); break; }
     case 'open': go('detail', b.dataset.id); break;
     case 'back': go('collection'); break;
     case 'filter': S.filter.decision = b.dataset.k; $$('.counts button').forEach(x => x.setAttribute('aria-pressed', x === b)); renderGrid(); break;
@@ -1231,14 +1332,14 @@ async function onAct(e){
     case 'guide-start': { const i = SLOTS.findIndex(s => !activePhoto(p, s.k)); S.guide = {pid:p.id, idx:Math.max(0, i), done:i < 0}; render(false); focusId('guide-go'); break; }
     case 'guide-skip': guideNext(p); render(false); focusId('guide-go'); break;
     case 'guide-end': S.guide = null; render(false); focusId('h-det'); break;
-    case 'arch-photo': case 'unarch-photo': { const ph = p.photos.find(x => x.id === b.dataset.pid); ph.archived = a === 'arch-photo'; touch(p); render(false); status(ph.archived ? 'Photo archived (not deleted).' : 'Photo restored.'); break; }
+    case 'arch-photo': case 'unarch-photo': { const ph = p.photos.find(x => x.id === b.dataset.pid); ph.archived = a === 'arch-photo'; touch(p); keepScroll(() => render(false)); status(ph.archived ? 'Photo archived. Open “Archived photos” on this page to restore it.' : 'Photo restored.'); break; }
     case 'rec-pick': pickFor('in-rec'); break;
     case 'rec-cam': pickFor('in-rec-cam'); break;
-    case 'arch-rec': case 'unarch-rec': { const r = p.receipts.find(x => x.id === b.dataset.rid); r.archived = a === 'arch-rec'; touch(p); render(false); break; }
-    case 'add-sale': p.sales.push({id:uid('sl-'), venue:'', listedDate:'', asking:null, soldDate:'', soldPrice:null, fees:null, notes:'', archived:false, addedAt:nowIso()}); touch(p); render(false); { const f = $$('[data-sfield=venue]').pop(); if (f) f.focus(); } break;
-    case 'arch-sale': case 'unarch-sale': { const s = p.sales.find(x => x.id === b.dataset.sid); s.archived = a === 'arch-sale'; touch(p); render(false); break; }
+    case 'arch-rec': case 'unarch-rec': { const r = p.receipts.find(x => x.id === b.dataset.rid); r.archived = a === 'arch-rec'; touch(p); keepScroll(() => render(false)); status(r.archived ? 'Receipt archived. Open “Archived receipts” on this page to restore it.' : 'Receipt restored.'); break; }
+    case 'add-sale': p.sales.push({id:uid('sl-'), venue:'', listedDate:'', asking:null, soldDate:'', soldPrice:null, fees:null, notes:'', archived:false, draft:true, addedAt:nowIso()}); touch(p); render(false); { const f = $$('[data-sfield=venue]').pop(); if (f) f.focus(); } break;
+    case 'arch-sale': case 'unarch-sale': { const s = p.sales.find(x => x.id === b.dataset.sid); s.archived = a === 'arch-sale'; touch(p); keepScroll(() => render(false)); status(s.archived ? 'Sale archived. Open “Archived entries” under Listings & sales to restore it.' : 'Sale restored.'); break; }
     case 'use-cat': p.owner.category = p.claude.category; touch(p); render(false); status('Category updated.'); break;
-    case 'archive': case 'unarchive': p.archived = a === 'archive'; touch(p); render(false); status(p.archived ? 'Painting archived (not deleted).' : 'Painting restored.'); break;
+    case 'archive': case 'unarchive': p.archived = a === 'archive'; touch(p); render(false); status(p.archived ? 'Painting archived. To restore it: Collection tab, then Archived.' : 'Painting restored.'); break;
     case 'persist': { let ok = false; try { ok = await navigator.storage.persist(); } catch {} status(ok ? 'The browser will keep this data.' : 'The browser did not agree. On iPhone, add PaintScout to the Home Screen and send batches regularly.'); fillStorage(); break; }
     case 'share': doExport('share'); break;
     case 'download': doExport('download'); break;
@@ -1253,15 +1354,54 @@ async function onAct(e){
   }
 }
 async function createPainting(){
-  const n = newPainting(); S.paintings.unshift(n); await idb.put('paintings', n); if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  const n = newPainting(); rememberNum(n.num); S.paintings.unshift(n); await idb.put('paintings', n); if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   S.guide = {pid:n.id, idx:0, done:false}; status('New painting ' + n.num + '.'); go('detail', n.id);
 }
-function focusId(id){ const el = document.getElementById(id); if (el) { if (!el.matches('button,input,select,textarea,a')) el.tabIndex = -1; el.focus(); } }
+function focusId(id, keep){ const el = document.getElementById(id); if (el) { if (!el.matches('button,input,select,textarea,a')) el.tabIndex = -1; el.focus(keep ? {preventScroll:true} : undefined); } }
+/* Re-drawing a page must not move the view (OI-62): remember the scroll position and put it back at once
+   (the page's smooth-scroll setting would otherwise animate the jump). */
+function keepScroll(fn){ const y = window.scrollY; const r = fn(); window.scrollTo({top:y, behavior:'instant'}); return r; }
+/* A draft entry "has content" when anything beyond its default date is filled in, or it has photos. */
+function draftHasContent(p, kind, e){
+  const skip = ['id', 'archived', 'draft', 'addedAt', 'outDate'];
+  const typed = Object.keys(e).some(k => !skip.includes(k) && !isEmpty(e[k]));
+  const photos = kind === 'custody' && p.photos.some(ph => (ph.slot || '').endsWith('-' + e.id));
+  return typed || photos;
+}
+function discardDraft(p, kind, id){
+  p[kind] = (p[kind] || []).filter(x => x.id !== id);
+  if (kind === 'custody') p.photos = p.photos.filter(ph => !(ph.slot || '').endsWith('-' + id));
+  touch(p); keepScroll(() => render(false)); status('Cancelled. The entry was thrown away.');
+}
+/* Saving text safely (OI-63). On an iPhone, pasted text does not fire `input`; the box only saves when it loses
+   focus, so closing the tab right after a paste lost it. Now: save on `input`, `paste`, `change`, `focusout`,
+   and sweep every text box before the page is hidden or closed and every few seconds. A box is saved only
+   when its text really differs from what is stored, so the sweep never marks untouched paintings as changed. */
+function modelText(p, el){
+  let v;
+  if (el.dataset.field) v = getPath(p, el.dataset.field);
+  else if (el.dataset.sale) { const s = p.sales.find(x => x.id === el.dataset.sale); v = s && s[el.dataset.sfield]; }
+  else if (el.dataset.sub) { const s = (p[el.dataset.sub] || []).find(x => x.id === el.dataset.subid); v = s && s[el.dataset.sfield]; }
+  else return null;
+  return v;
+}
+function sameAsModel(p, el){
+  const m = modelText(p, el); if (m === null) return true;
+  if (el.dataset.money) { const n = parseMoney(el.value); return n === undefined || n === (m == null ? null : m); }
+  if (el.dataset.list) return (Array.isArray(m) ? m.join(',') : String(m ?? '')) === el.value.split(',').map(s => s.trim()).filter(Boolean).join(',');
+  return String(m ?? '') === el.value;
+}
+function sweepFields(){
+  if (S.view !== 'detail') return; const p = cur(); if (!p) return;
+  for (const el of $$('#main [data-field], #main [data-sale], #main [data-sub]')) {
+    if (el.type === 'radio' || el.type === 'checkbox' || !('value' in el)) continue;
+    if (!sameAsModel(p, el)) onInput({target:el});
+  }
+}
 function guideNext(p){ const g = S.guide; if (!g) return; const i = SLOTS.findIndex((s, j) => j > g.idx && !activePhoto(p, s.k)); if (i < 0) g.done = true; else g.idx = i; }
 function onInput(e){
   const el = e.target;
   if (el.id === 'q') { S.filter.q = el.value; renderGrid(); return; }
-  if (el.id === 'show-arch') { S.filter.archived = el.checked; renderGrid(); return; }
   if (el.id === 'dev') { lsSet('ps-device', el.value.trim()); return; }
   if (el.id === 'dev-new') return;
   if (el.id === 'lens-slot') { S.lensSlot = el.value; const q = cur(), ph = q && activePhoto(q, el.value), im = $('#lens-prev');
@@ -1287,12 +1427,14 @@ async function onFiles(e){
   const el = e.target; const files = Array.from(el.files || []); if (!files.length) return;
   if (el.id === 'in-import') return readImport(files[0]);
   const p = cur(); if (!p) return;
-  if (el.id === 'in-rec' || el.id === 'in-rec-cam') { const n = await addReceipts(p, files); render(false); status(n ? `${n} receipt${n > 1 ? 's' : ''} added.` : 'No receipt added.'); focusId('h-pur'); return; }
+  /* v0.4.4 (OI-62): stay where you are after a photo or receipt; keyboard focus returns to the section
+     heading without scrolling, so the new picture stays in view. */
+  if (el.id === 'in-rec' || el.id === 'in-rec-cam') { const n = await addReceipts(p, files); keepScroll(() => render(false)); status(n ? `${n} receipt${n > 1 ? 's' : ''} added.` : 'No receipt added.'); focusId('h-pur', true); return; }
   const slot = S.slotTarget || 'extra'; const n = await addPhotos(p, files, slot);
   if (n && S.guide && S.guide.pid === p.id && SLOTS[S.guide.idx] && SLOTS[S.guide.idx].k === slot) guideNext(p);
-  render(false); status(n ? 'Photo saved.' : 'No photo added.');
-  if (slot.startsWith('cus-')) { const c = document.getElementById('cus-' + slot.split('-').slice(2).join('-')); if (c) c.scrollIntoView({block:'start'}); focusId('h-cus'); }
-  else focusId(S.guide ? 'guide-go' : 'h-ph');
+  keepScroll(() => render(false)); status(n ? 'Photo saved.' : 'No photo added.');
+  if (slot.startsWith('cus-')) focusId('h-cus', true);
+  else focusId(S.guide ? 'guide-go' : 'h-ph', true);
 }
 function setupDrop(){
   const target = e => e.target.closest && e.target.closest('[data-drop]');
@@ -1303,8 +1445,8 @@ function setupDrop(){
     if (kind === 'import') return readImport(files[0]);
     if (limitLevel() >= 3) return limitBlock('files');
     const p = cur(); if (!p) return;
-    if (kind === 'receipt') { await addReceipts(p, files); render(false); status('Receipt added.'); }
-    else { await addPhotos(p, files, t.dataset.slot); render(false); status('Photo saved.'); } });
+    if (kind === 'receipt') { await addReceipts(p, files); keepScroll(() => render(false)); status('Receipt added.'); }
+    else { await addPhotos(p, files, t.dataset.slot); keepScroll(() => render(false)); status('Photo saved.'); } });
   window.addEventListener('dragover', e => e.preventDefault()); window.addEventListener('drop', e => { if (!target(e)) e.preventDefault(); });
 }
 
@@ -1317,12 +1459,17 @@ async function start(){
   document.addEventListener('click', onAct);
   $('.skip').addEventListener('click', e => { e.preventDefault(); const m = $('#main'); m.focus(); m.scrollIntoView({block:'start'}); });
   $('#main').addEventListener('input', onInput); $('#main').addEventListener('change', onInput); $('#dlg').addEventListener('change', onInput);
+  /* A paste on iPhone may not fire `input` (OI-63): save after the pasted text lands, and when a box loses focus. */
+  $('#main').addEventListener('paste', e => { const el = e.target; setTimeout(() => { if (el && el.isConnected) onInput({target:el}); }, 0); });
+  $('#main').addEventListener('focusout', e => { const el = e.target; if (el && el.matches && el.matches('[data-field],[data-sale],[data-sub]') && el.type !== 'radio') { const p = cur(); if (p && !sameAsModel(p, el)) onInput({target:el}); } });
+  setInterval(sweepFields, 3000);
   $$('nav.tabs button').forEach(b => b.addEventListener('click', () => go(b.dataset.nav)));
   $$('input[type=file]').forEach(i => i.addEventListener('change', onFiles));
   $('#dlg').addEventListener('close', () => { S.pending = null; });
   window.addEventListener('hashchange', route);
-  window.addEventListener('beforeunload', () => { if (saveQ.size) flushSaves(); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden && saveQ.size) flushSaves(); });
+  const leaving = () => { try { sweepFields(); } catch {} if (saveQ.size) flushSaves(); };
+  window.addEventListener('beforeunload', leaving); window.addEventListener('pagehide', leaving);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) leaving(); });
   setupDrop(); route();
 }
 window.addEventListener('error', e => status('Something went wrong: ' + e.message));
